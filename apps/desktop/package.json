@@ -1,0 +1,33 @@
+{
+  "name": "@datamaker/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build && tsc -p tsconfig.main.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@datamaker/contracts": "workspace:*",
+    "@ant-design/icons": "latest",
+    "@vitejs/plugin-react": "latest",
+    "antd": "latest",
+    "electron": "latest",
+    "fastify": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-router-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

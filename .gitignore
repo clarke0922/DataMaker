@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+dist/
+out/
+.vite/
+coverage/
+*.log
+*.db
+*.db-shm
+*.db-wal
+.env
+.DS_Store
