@@ -38,18 +38,43 @@ export interface SearchHitDto {
   comment: string | null;
 }
 
+export type ManagementModule =
+  | 'weights' | 'dictionaries' | 'dictionaryTree' | 'factors'
+  | 'imports' | 'tables' | 'privateTables' | 'dailyCounts'
+  | 'cubes' | 'categories';
+
+export interface ManagementRecordDto {
+  id: string;
+  [key: string]: string | number | boolean | null;
+}
+
+export interface SaveManagementRecordInput {
+  id?: string;
+  values: Record<string, string | number | boolean | null>;
+}
+
 export interface DesktopApi {
   system: {
     info(): Promise<ApiResult<SystemInfoDto>>;
+    chooseImportFile(): Promise<ApiResult<string | null>>;
   };
   metadata: {
     stats(): Promise<ApiResult<MetadataStatsDto>>;
     search(query: string): Promise<ApiResult<SearchHitDto[]>>;
   };
+  management: {
+    list(module: ManagementModule): Promise<ApiResult<ManagementRecordDto[]>>;
+    save(module: ManagementModule, input: SaveManagementRecordInput): Promise<ApiResult<ManagementRecordDto>>;
+    remove(module: ManagementModule, id: string): Promise<ApiResult<void>>;
+  };
 }
 
 export const IPC_CHANNELS = {
   systemInfo: 'system:info',
+  systemChooseImportFile: 'system:choose-import-file',
   metadataStats: 'metadata:stats',
-  metadataSearch: 'metadata:search'
+  metadataSearch: 'metadata:search',
+  managementList: 'management:list',
+  managementSave: 'management:save',
+  managementRemove: 'management:remove'
 } as const;

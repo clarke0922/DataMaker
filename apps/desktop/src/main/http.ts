@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { ApplicationServices } from './services.js';
+import type { ManagementModule, SaveManagementRecordInput } from '@datamaker/contracts';
 
 export async function startHttpServer(services: ApplicationServices) {
   const server = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
@@ -15,6 +16,12 @@ export async function startHttpServer(services: ApplicationServices) {
   server.get('/api/v1/system/info', async () => services.systemInfo());
   server.get('/api/v1/metadata/stats', async () => services.metadataStats());
   server.get('/api/v1/search', async request => services.metadataSearch(String((request.query as { q?: string }).q ?? '')));
+  server.get('/api/v1/management/:module', async request => services.managementList((request.params as { module: ManagementModule }).module));
+  server.post('/api/v1/management/:module', async request => services.managementSave((request.params as { module: ManagementModule }).module, request.body as SaveManagementRecordInput));
+  server.delete('/api/v1/management/:module/:id', async request => {
+    const params = request.params as { module: ManagementModule; id: string };
+    return services.managementRemove(params.module, params.id);
+  });
   await server.listen({ host: '127.0.0.1', port: 0 });
   const address = server.server.address();
   return { server, token, port: typeof address === 'object' && address ? address.port : 0 };
