@@ -7,7 +7,7 @@ const ok = <T>(data: T): ApiResult<T> => ({ ok: true, data, requestId: randomUUI
 const fail = (message: string): ApiResult<never> => ({ ok: false, requestId: randomUUID(), error: { code: 'INVALID_INPUT', category: 'VALIDATION', message, retryable: false } });
 const attempt = <T>(operation: () => T): ApiResult<T> => {
   try { return ok(operation()); }
-  catch (error) { return fail(error instanceof Error ? error.message : '操作失败'); }
+  catch (error) { return fail(error instanceof Error ? error.message : 'Operation failed'); }
 };
 
 export class ApplicationServices {
@@ -15,7 +15,7 @@ export class ApplicationServices {
   systemInfo(): ApiResult<SystemInfoDto> { return ok(this.infoFactory()); }
   metadataStats(): ApiResult<MetadataStatsDto> { return ok(this.database.stats()); }
   metadataSearch(query: string): ApiResult<SearchHitDto[]> {
-    if (query.length > 100) return fail('搜索词不能超过 100 个字符');
+    if (query.length > 100) return fail('Search queries cannot exceed 100 characters');
     return ok(this.database.search(query));
   }
   managementList(module: ManagementModule): ApiResult<ManagementRecordDto[]> { return attempt(() => this.management.list(module)); }

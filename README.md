@@ -1,23 +1,30 @@
 # DataMaker
 
-本地优先的元数据管理桌面应用，采用 Electron、React、TypeScript、Node.js 和 SQLite。
+[Chinese README](README.zh-CN.md)
 
-## 当前可运行切片
+DataMaker is a local-first metadata management desktop application built with Electron, React, TypeScript, Node.js, and SQLite.
 
-- Electron 安全窗口与 sandboxed preload 白名单 API
-- Node.js 共享应用服务及仅回环访问的 Fastify API
-- SQLite（`node:sqlite`）WAL、外键、FTS5 和首版核心模式
-- 六类默认元数据质量规则
-- 元数据统计与全文搜索工作台
-- 权重、字典/树形字典、要素、数据表/私有表、每日增量、数据立方和表分类 CRUD
-- SQL 与 SQLite 外部文件扫描导入，导入任务可追踪
-- 未初始化管理员状态提示
+English is the default language for the application, source code, documentation, and commit messages. The desktop UI can be switched to Simplified Chinese from the language selector in the header.
 
-详细设计见[项目详细设计](项目详细设计.md)，旧库完整字段见[项目数据字典](项目数据字典.md)。
+## Current Features
 
-## 本地开发
+- Secure Electron window with a sandboxed, allowlisted preload API
+- Shared Node.js application services exposed through IPC and loopback-only Fastify APIs
+- SQLite via `node:sqlite`, with WAL, foreign keys, FTS5, and an initial normalized schema
+- Six built-in metadata quality rule types
+- Metadata statistics and full-text search dashboard
+- CRUD management for weights, flat and tree dictionaries, factors, public/private tables, daily counts, data cubes, and table categories
+- SQL and SQLite metadata import with traceable import jobs
+- English and Simplified Chinese UI locales, with English as the default
 
-要求 Node.js 22+ 与 pnpm 11+。
+The reverse-engineered legacy documentation is currently available in Chinese:
+
+- [Detailed Design (Chinese)](project-detailed-design.zh-CN.md)
+- [Legacy Data Dictionary (Chinese)](project-data-dictionary.zh-CN.md)
+
+## Local Development
+
+Requirements: Node.js 22 or later and pnpm 11 or later.
 
 ```bash
 pnpm install
@@ -25,9 +32,9 @@ pnpm build
 pnpm --filter @datamaker/desktop start
 ```
 
-Windows PowerShell 若禁止执行 `pnpm.ps1`，可使用 `pnpm.cmd`。
+If Windows PowerShell blocks `pnpm.ps1`, use `pnpm.cmd` instead.
 
-## 验证
+## Validation
 
 ```bash
 pnpm typecheck
@@ -35,4 +42,8 @@ pnpm test
 pnpm build
 ```
 
-应用数据库位于 Electron `app.getPath('userData')` 目录。外部 SQLite 数据源在后续采集迭代中始终以只读方式打开。
+The application database is stored under Electron's `app.getPath('userData')` directory. External SQLite sources are opened read-only during metadata imports.
+
+## Contribution Language
+
+Write source code, code comments, branch names, commit messages, PR titles, and the default documentation in English. Add localized documentation with an explicit locale suffix such as `.zh-CN.md`. See [CONTRIBUTING.md](CONTRIBUTING.md).
