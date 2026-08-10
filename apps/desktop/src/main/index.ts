@@ -25,8 +25,8 @@ async function bootstrap() {
   ipcMain.handle(IPC_CHANNELS.systemInfo, () => services.systemInfo());
   ipcMain.handle(IPC_CHANNELS.systemChooseImportFile, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [
-      { name: '支持的数据文件', extensions: ['sql', 'sqlite', 'sqlite3', 'db', 'xlsx', 'xls'] },
-      { name: '所有文件', extensions: ['*'] }
+      { name: 'Supported data files', extensions: ['sql', 'sqlite', 'sqlite3', 'db', 'xlsx', 'xls'] },
+      { name: 'All files', extensions: ['*'] }
     ] });
     return { ok: true, data: result.canceled ? null : result.filePaths[0] ?? null, requestId: crypto.randomUUID() };
   });

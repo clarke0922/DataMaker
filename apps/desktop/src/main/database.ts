@@ -145,18 +145,20 @@ export class MetadataDatabase {
   }
 
   private seedRules() {
-    const rows = [
-      ['table-primary-key', '表必须定义主键', 'primary_key', 'error'],
-      ['table-comment', '表必须填写注释', 'comment', 'warning'],
-      ['column-comment', '字段必须填写注释', 'comment', 'warning'],
-      ['column-type', '字段类型应可标准化', 'type', 'warning'],
-      ['object-naming', '对象命名规范', 'naming', 'warning'],
-      ['relation-integrity', '关系字段必须完整', 'relation', 'error']
+    const rows: Array<[string, string, string, string]> = [
+      ['table-primary-key', 'Tables must define a primary key', 'primary_key', 'error'],
+      ['table-comment', 'Tables must include a comment', 'comment', 'warning'],
+      ['column-comment', 'Columns must include a comment', 'comment', 'warning'],
+      ['column-type', 'Column types must be normalizable', 'type', 'warning'],
+      ['object-naming', 'Object naming convention', 'naming', 'warning'],
+      ['relation-integrity', 'Relationship fields must be complete', 'relation', 'error']
     ];
     const insert = this.db.prepare('INSERT OR IGNORE INTO quality_rules(id,code,name,rule_type,severity) VALUES(?,?,?,?,?)');
     this.db.exec('BEGIN');
     try {
       rows.forEach(row => insert.run(randomUUID(), ...row));
+      const rename = this.db.prepare('UPDATE quality_rules SET name = ? WHERE code = ?');
+      rows.forEach(row => rename.run(row[1], row[0]));
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');

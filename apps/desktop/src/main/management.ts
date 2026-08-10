@@ -61,10 +61,14 @@ export class MetadataManagementRepository {
   }
 
   private seed() {
+    // Normalize the three legacy built-in Chinese labels without making them canonical source strings.
+    this.db.prepare("UPDATE column_weights SET name = 'Required' WHERE name = '\u5fc5\u586b' AND score = 80").run();
+    this.db.prepare("UPDATE column_weights SET name = 'Important' WHERE name = '\u91cd\u8981' AND score = 50").run();
+    this.db.prepare("UPDATE column_weights SET name = 'Standard' WHERE name = '\u4e00\u822c' AND score = 20").run();
     const insert = this.db.prepare('INSERT OR IGNORE INTO column_weights(id,name,score,display_order) VALUES(?,?,?,?)');
-    insert.run(randomUUID(), '必填', 80, 1);
-    insert.run(randomUUID(), '重要', 50, 2);
-    insert.run(randomUUID(), '一般', 20, 3);
+    insert.run(randomUUID(), 'Required', 80, 1);
+    insert.run(randomUUID(), 'Important', 50, 2);
+    insert.run(randomUUID(), 'Standard', 20, 3);
   }
 
   list(module: ManagementModule): ManagementRecordDto[] {
@@ -83,12 +87,12 @@ export class MetadataManagementRepository {
     if (module === 'imports' && !values.status) values.status = 'pending';
     if (module === 'cubes' && !values.definition_json) values.definition_json = '{}';
     for (const field of config.required) {
-      if (values[field] === undefined || values[field] === null || values[field] === '') throw new Error(`字段 ${field} 不能为空`);
+      if (values[field] === undefined || values[field] === null || values[field] === '') throw new Error(`Field ${field} is required`);
     }
     const selected = config.columns.filter(column => values[column] !== undefined);
     const id = input.id ?? randomUUID();
     if (input.id) {
-      if (!this.db.prepare(`SELECT 1 FROM ${config.table} WHERE id = ?`).get(id)) throw new Error('记录不存在');
+      if (!this.db.prepare(`SELECT 1 FROM ${config.table} WHERE id = ?`).get(id)) throw new Error('Record not found');
       this.db.prepare(`UPDATE ${config.table} SET ${selected.map(column => `${column} = ?`).join(', ')} WHERE id = ?`).run(...selected.map(column => values[column] as never), id);
     } else {
       this.db.prepare(`INSERT INTO ${config.table}(id,${selected.join(',')}) VALUES(?${selected.map(() => ',?').join('')})`).run(id, ...selected.map(column => values[column] as never));
@@ -113,7 +117,7 @@ export class MetadataManagementRepository {
         tableNames = (source.prepare("SELECT name FROM sqlite_schema WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>).map(row => row.name);
         source.close();
       } else {
-        throw new Error('Excel 数据行导入将在下一迭代提供；当前请使用 SQL 或 SQLite 文件');
+        throw new Error('Excel row import is planned for a future iteration. Use a SQL or SQLite file for now.');
       }
       const now = new Date().toISOString();
       const insert = this.db.prepare(`INSERT OR IGNORE INTO managed_data_tables(
@@ -121,7 +125,7 @@ export class MetadataManagementRepository {
       ) VALUES(?,?,?,?,0,0,1,0,0,?,?,?)`);
       this.db.exec('BEGIN');
       try {
-        for (const name of [...new Set(tableNames)]) insert.run(randomUUID(), name, name, 'imported', `由外部${type.toUpperCase()}导入`, now, now);
+        for (const name of [...new Set(tableNames)]) insert.run(randomUUID(), name, name, 'imported', `Imported from external ${type.toUpperCase()}`, now, now);
         this.db.prepare("UPDATE import_jobs SET status = 'completed', imported_rows = ?, error_message = NULL WHERE id = ?").run(new Set(tableNames).size, jobId);
         this.db.exec('COMMIT');
       } catch (error) {
@@ -129,13 +133,13 @@ export class MetadataManagementRepository {
         throw error;
       }
     } catch (error) {
-      this.db.prepare("UPDATE import_jobs SET status = 'failed', error_message = ? WHERE id = ?").run(error instanceof Error ? error.message : '导入失败', jobId);
+      this.db.prepare("UPDATE import_jobs SET status = 'failed', error_message = ? WHERE id = ?").run(error instanceof Error ? error.message : 'Import failed', jobId);
     }
   }
 
   remove(module: ManagementModule, id: string) {
     const config = configs[module];
     const result = this.db.prepare(`DELETE FROM ${config.table} WHERE id = ?`).run(id);
-    if (!result.changes) throw new Error('记录不存在');
+    if (!result.changes) throw new Error('Record not found');
   }
 }

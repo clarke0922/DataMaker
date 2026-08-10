@@ -9,7 +9,7 @@ describe('MetadataManagementRepository', () => {
   it('initializes every management module and legacy weight defaults', () => {
     const database = new MetadataDatabase(':memory:');
     const repository = new MetadataManagementRepository(database.db);
-    expect(repository.list('weights').map(item => [item.name, item.score])).toEqual([['必填', 80], ['重要', 50], ['一般', 20]]);
+    expect(repository.list('weights').map(item => [item.name, item.score])).toEqual([['Required', 80], ['Important', 50], ['Standard', 20]]);
     for (const module of ['dictionaries', 'dictionaryTree', 'factors', 'imports', 'tables', 'privateTables', 'dailyCounts', 'cubes', 'categories'] as const) {
       expect(repository.list(module)).toEqual([]);
     }
@@ -19,10 +19,10 @@ describe('MetadataManagementRepository', () => {
   it('creates, updates and deletes records', () => {
     const database = new MetadataDatabase(':memory:');
     const repository = new MetadataManagementRepository(database.db);
-    const created = repository.save('categories', { values: { name: '基础数据', display_order: 1 } });
+    const created = repository.save('categories', { values: { name: 'Reference Data', display_order: 1 } });
     expect(repository.list('categories')).toHaveLength(1);
-    repository.save('categories', { id: created.id, values: { name: '基础数据分类' } });
-    expect(repository.list('categories')[0]?.name).toBe('基础数据分类');
+    repository.save('categories', { id: created.id, values: { name: 'Reference Data Category' } });
+    expect(repository.list('categories')[0]?.name).toBe('Reference Data Category');
     repository.remove('categories', created.id);
     expect(repository.list('categories')).toEqual([]);
     database.close();
@@ -31,8 +31,8 @@ describe('MetadataManagementRepository', () => {
   it('keeps private tables out of the public table filter', () => {
     const database = new MetadataDatabase(':memory:');
     const repository = new MetadataManagementRepository(database.db);
-    repository.save('tables', { values: { name: 'PUBLIC_DATA', display_name: '公开数据', is_public: 1 } });
-    repository.save('privateTables', { values: { name: 'PRIVATE_DATA', display_name: '私有数据', owner: 'admin' } });
+    repository.save('tables', { values: { name: 'PUBLIC_DATA', display_name: 'Public Data', is_public: 1 } });
+    repository.save('privateTables', { values: { name: 'PRIVATE_DATA', display_name: 'Private Data', owner: 'admin' } });
     expect(repository.list('tables')).toHaveLength(2);
     expect(repository.list('privateTables').map(item => item.name)).toEqual(['PRIVATE_DATA']);
     database.close();
