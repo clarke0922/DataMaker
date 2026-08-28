@@ -1,6 +1,6 @@
-import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
-import type { SearchHitDto } from '@datamaker/contracts';
+import { DatabaseSync } from "node:sqlite";
+import { createHash, randomUUID } from "node:crypto";
+import type { SearchHitDto } from "@datamaker/contracts";
 
 const MIGRATION = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -126,57 +126,258 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   context_json TEXT NOT NULL DEFAULT '{}',
   occurred_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS relation_columns (relation_id TEXT NOT NULL REFERENCES table_relations(id) ON DELETE CASCADE,source_column_id TEXT NOT NULL REFERENCES meta_columns(id) ON DELETE CASCADE,target_column_id TEXT NOT NULL REFERENCES meta_columns(id) ON DELETE CASCADE,ordinal INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(relation_id,source_column_id,target_column_id));
+CREATE TABLE IF NOT EXISTS meta_indexes (id TEXT PRIMARY KEY,table_id TEXT NOT NULL REFERENCES meta_tables(id) ON DELETE CASCADE,name TEXT NOT NULL,unique_flag INTEGER NOT NULL DEFAULT 0 CHECK(unique_flag IN (0,1)),origin TEXT NOT NULL DEFAULT 'created',columns_json TEXT NOT NULL DEFAULT '[]',raw_ddl TEXT,UNIQUE(table_id,name));
+CREATE TABLE IF NOT EXISTS tags (id TEXT PRIMARY KEY,name TEXT NOT NULL COLLATE NOCASE UNIQUE,color TEXT);
+CREATE TABLE IF NOT EXISTS object_tags (object_type TEXT NOT NULL,object_id TEXT NOT NULL,tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,PRIMARY KEY(object_type,object_id,tag_id));
+CREATE TABLE IF NOT EXISTS saved_queries (id TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id) ON DELETE CASCADE,name TEXT NOT NULL,query_text TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(user_id,name));
+CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS scan_jobs (id TEXT PRIMARY KEY,data_source_id TEXT NOT NULL REFERENCES data_sources(id) ON DELETE CASCADE,status TEXT NOT NULL,summary_json TEXT NOT NULL DEFAULT '{}',started_at TEXT NOT NULL,finished_at TEXT);
+CREATE TABLE IF NOT EXISTS rule_runs (id TEXT PRIMARY KEY,status TEXT NOT NULL,summary_json TEXT NOT NULL DEFAULT '{}',started_at TEXT NOT NULL,finished_at TEXT);
 CREATE VIRTUAL TABLE IF NOT EXISTS metadata_fts USING fts5(object_id UNINDEXED, object_type UNINDEXED, name, path, comment);
 `;
+
+const MIGRATION_V4 = `
+CREATE TABLE IF NOT EXISTS export_jobs (id TEXT PRIMARY KEY,status TEXT NOT NULL,request_json TEXT NOT NULL DEFAULT '{}',summary_json TEXT NOT NULL DEFAULT '{}',started_at TEXT NOT NULL,finished_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_meta_tables_schema_retired_name ON meta_tables(schema_id,retired,name);
+CREATE INDEX IF NOT EXISTS idx_meta_columns_table_ordinal ON meta_columns(table_id,ordinal);
+CREATE INDEX IF NOT EXISTS idx_relations_source_status ON table_relations(source_table_id,status);
+CREATE INDEX IF NOT EXISTS idx_relations_target_status ON table_relations(target_table_id,status);
+CREATE INDEX IF NOT EXISTS idx_rule_results_rule_created ON rule_results(rule_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rule_results_severity_created ON rule_results(severity,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_occurred ON audit_logs(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_result_occurred ON audit_logs(result,occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_occurred ON audit_logs(actor_user_id,occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_jobs_source_status ON scan_jobs(data_source_id,status,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rule_runs_status_started ON rule_runs(status,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_export_jobs_status_started ON export_jobs(status,started_at DESC);
+`;
+
+const MIGRATION_V5 = `
+ALTER TABLE users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0 CHECK(failed_login_count >= 0);
+ALTER TABLE users ADD COLUMN locked_until TEXT;
+CREATE INDEX IF NOT EXISTS idx_users_locked_until ON users(locked_until);
+`;
+
+const MIGRATION_V6 = `
+ALTER TABLE data_sources ADD COLUMN last_error TEXT;
+CREATE INDEX IF NOT EXISTS idx_data_sources_status ON data_sources(status);
+`;
+const MIGRATION_V7 = `
+ALTER TABLE rule_results ADD COLUMN status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','ignored'));
+ALTER TABLE rule_results ADD COLUMN resolution_note TEXT;
+ALTER TABLE rule_results ADD COLUMN resolved_at TEXT;
+ALTER TABLE rule_results ADD COLUMN resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_rule_results_status_created ON rule_results(status,created_at DESC);
+`;
+const MIGRATION_V8 = `
+ALTER TABLE rule_results ADD COLUMN run_id TEXT REFERENCES rule_runs(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_rule_results_run_created ON rule_results(run_id,created_at DESC);
+`;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export class MetadataDatabase {
   readonly db: DatabaseSync;
 
   constructor(file: string) {
     this.db = new DatabaseSync(file);
-    this.db.exec('PRAGMA foreign_keys = ON');
-    this.db.exec('PRAGMA journal_mode = WAL');
-    this.db.exec('PRAGMA synchronous = NORMAL');
-    this.db.exec('PRAGMA busy_timeout = 5000');
-    this.db.exec(MIGRATION);
-    const exists = this.db.prepare('SELECT 1 FROM schema_migrations WHERE version = 1').get();
-    if (!exists) this.db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'bootstrap-v1', new Date().toISOString());
-    this.seedRules();
-  }
-
-  private seedRules() {
-    const rows: Array<[string, string, string, string]> = [
-      ['table-primary-key', 'Tables must define a primary key', 'primary_key', 'error'],
-      ['table-comment', 'Tables must include a comment', 'comment', 'warning'],
-      ['column-comment', 'Columns must include a comment', 'comment', 'warning'],
-      ['column-type', 'Column types must be normalizable', 'type', 'warning'],
-      ['object-naming', 'Object naming convention', 'naming', 'warning'],
-      ['relation-integrity', 'Relationship fields must be complete', 'relation', 'error']
-    ];
-    const insert = this.db.prepare('INSERT OR IGNORE INTO quality_rules(id,code,name,rule_type,severity) VALUES(?,?,?,?,?)');
-    this.db.exec('BEGIN');
     try {
-      rows.forEach(row => insert.run(randomUUID(), ...row));
-      const rename = this.db.prepare('UPDATE quality_rules SET name = ? WHERE code = ?');
-      rows.forEach(row => rename.run(row[1], row[0]));
-      this.db.exec('COMMIT');
+      this.db.exec("PRAGMA foreign_keys = ON");
+      this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec("PRAGMA synchronous = NORMAL");
+      this.db.exec("PRAGMA busy_timeout = 5000");
+      const quickCheck = this.db.prepare("PRAGMA quick_check").get() as
+        { quick_check: string } | undefined;
+      if (quickCheck?.quick_check !== "ok")
+        throw new Error(
+          `Database integrity check failed: ${quickCheck?.quick_check ?? "no result"}`,
+        );
+      this.db.exec(MIGRATION);
+      const exists = this.db
+        .prepare("SELECT 1 FROM schema_migrations WHERE version = 1")
+        .get();
+      if (!exists)
+        this.db
+          .prepare("INSERT INTO schema_migrations VALUES (?, ?, ?)")
+          .run(1, "bootstrap-v1", new Date().toISOString());
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO schema_migrations VALUES(2,'governance-v2',?)",
+        )
+        .run(new Date().toISOString());
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO schema_migrations VALUES(3,'indexes-v3',?)",
+        )
+        .run(new Date().toISOString());
+      this.validateHistoricalMigration(1, "bootstrap-v1");
+      this.validateHistoricalMigration(2, "governance-v2");
+      this.validateHistoricalMigration(3, "indexes-v3");
+      this.applyMigration(4, "lifecycle-v4", MIGRATION_V4);
+      this.applyMigration(5, "authentication-v5", MIGRATION_V5);
+      this.applyMigration(6, "source-status-v6", MIGRATION_V6);
+      this.applyMigration(7, "quality-resolution-v7", MIGRATION_V7);
+      this.applyMigration(8, "quality-result-history-v8", MIGRATION_V8);
+      this.seedRules();
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      this.db.close();
       throw error;
     }
   }
 
-  initialized() { return Boolean(this.db.prepare('SELECT 1 FROM users LIMIT 1').get()); }
+  private validateHistoricalMigration(version: number, checksum: string) {
+    const row = this.db
+      .prepare("SELECT checksum FROM schema_migrations WHERE version=?")
+      .get(version) as { checksum: string } | undefined;
+    if (!row || row.checksum !== checksum)
+      throw new Error(`Schema migration ${version} checksum mismatch`);
+  }
+
+  private applyMigration(version: number, name: string, sql: string) {
+    const checksum = `${name}:${createHash("sha256").update(sql).digest("hex")}`;
+    const row = this.db
+      .prepare("SELECT checksum FROM schema_migrations WHERE version=?")
+      .get(version) as { checksum: string } | undefined;
+    if (row) {
+      if (row.checksum !== checksum)
+        throw new Error(`Schema migration ${version} checksum mismatch`);
+      return;
+    }
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec(sql);
+      this.db
+        .prepare(
+          "INSERT INTO schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
+        )
+        .run(version, checksum, new Date().toISOString());
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO app_settings(key,value_json,updated_at) VALUES('metadata.revision','0',?)",
+        )
+        .run(new Date().toISOString());
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private seedRules() {
+    const rows: Array<[string, string, string, string]> = [
+      [
+        "table-primary-key",
+        "Tables must define a primary key",
+        "primary_key",
+        "error",
+      ],
+      ["table-comment", "Tables must include a comment", "comment", "warning"],
+      [
+        "column-comment",
+        "Columns must include a comment",
+        "comment",
+        "warning",
+      ],
+      ["column-type", "Column types must be normalizable", "type", "warning"],
+      [
+        "column-required",
+        "Identifier fields must be required",
+        "required",
+        "warning",
+      ],
+      ["object-naming", "Object naming convention", "naming", "warning"],
+      [
+        "relation-integrity",
+        "Relationship fields must be complete",
+        "relation",
+        "error",
+      ],
+    ];
+    const insert = this.db.prepare(
+      "INSERT OR IGNORE INTO quality_rules(id,code,name,rule_type,severity) VALUES(?,?,?,?,?)",
+    );
+    this.db.exec("BEGIN");
+    try {
+      rows.forEach((row) => insert.run(randomUUID(), ...row));
+      const rename = this.db.prepare(
+        "UPDATE quality_rules SET name = ? WHERE code = ?",
+      );
+      rows.forEach((row) => rename.run(row[1], row[0]));
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  initialized() {
+    return Boolean(this.db.prepare("SELECT 1 FROM users LIMIT 1").get());
+  }
 
   stats() {
-    const count = (table: string) => Number((this.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
-    return { sources: count('data_sources'), tables: count('meta_tables'), columns: count('meta_columns'), relations: count('table_relations'), qualityIssues: count('rule_results') };
+    const count = (table: string) =>
+      Number(
+        (
+          this.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as {
+            n: number;
+          }
+        ).n,
+      );
+    return {
+      sources: count("data_sources"),
+      tables: count("meta_tables"),
+      columns: count("meta_columns"),
+      relations: count("table_relations"),
+      qualityIssues: count("rule_results"),
+    };
   }
 
   search(query: string): SearchHitDto[] {
-    if (!query.trim()) return [];
-    return this.db.prepare('SELECT object_id AS id, object_type AS objectType, name, path, comment FROM metadata_fts WHERE metadata_fts MATCH ? ORDER BY rank LIMIT 50').all(`${query.replace(/["']/g, '')}*`) as unknown as SearchHitDto[];
+    const tokens = query
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((token) => `"${token.replace(/"/g, '""')}"*`);
+    if (!tokens.length) return [];
+    return this.db
+      .prepare(
+        "SELECT object_id AS id, object_type AS objectType, name, path, comment FROM metadata_fts WHERE metadata_fts MATCH ? ORDER BY rank LIMIT 50",
+      )
+      .all(tokens.join(" AND ")) as unknown as SearchHitDto[];
   }
 
-  close() { this.db.close(); }
+  rebuildSearchIndex() {
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec("DELETE FROM metadata_fts");
+      this.db.exec(`
+        INSERT INTO metadata_fts(object_id,object_type,name,path,comment)
+        SELECT table_object.id,'table',table_object.name,
+          source.name || '/' || schema_object.name || '/' || table_object.name,
+          TRIM(COALESCE(table_object.comment,'') || ' ' || COALESCE((SELECT GROUP_CONCAT(tag.name,' ') FROM object_tags assignment JOIN tags tag ON tag.id=assignment.tag_id WHERE assignment.object_type='table' AND assignment.object_id=table_object.id),''))
+        FROM meta_tables table_object
+        JOIN schemas schema_object ON schema_object.id=table_object.schema_id
+        JOIN catalogs catalog ON catalog.id=schema_object.catalog_id
+        JOIN data_sources source ON source.id=catalog.data_source_id;
+        INSERT INTO metadata_fts(object_id,object_type,name,path,comment)
+        SELECT column_object.id,'column',column_object.name,
+          source.name || '/' || schema_object.name || '/' || table_object.name || '/' || column_object.name,
+          TRIM(COALESCE(column_object.comment,'') || ' ' || COALESCE((SELECT GROUP_CONCAT(tag.name,' ') FROM object_tags assignment JOIN tags tag ON tag.id=assignment.tag_id WHERE assignment.object_type='column' AND assignment.object_id=column_object.id),''))
+        FROM meta_columns column_object
+        JOIN meta_tables table_object ON table_object.id=column_object.table_id
+        JOIN schemas schema_object ON schema_object.id=table_object.schema_id
+        JOIN catalogs catalog ON catalog.id=schema_object.catalog_id
+        JOIN data_sources source ON source.id=catalog.data_source_id;
+      `);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  close() {
+    this.db.close();
+  }
 }

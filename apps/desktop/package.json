@@ -1,6 +1,8 @@
 {
   "name": "@datamaker/desktop",
   "version": "0.1.0",
+  "description": "Local-first metadata management desktop application",
+  "author": "DataMaker Contributors",
   "private": true,
   "type": "module",
   "main": "dist/main/index.js",
@@ -9,25 +11,81 @@
     "build": "vite build && tsc -p tsconfig.main.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
-    "start": "electron ."
+    "start": "electron .",
+    "package:dir": "pnpm build && electron-builder --dir",
+    "dist:win": "pnpm build && electron-builder --win nsis --x64",
+    "dist:mac": "pnpm build && electron-builder --mac dmg --universal"
   },
   "dependencies": {
     "@datamaker/contracts": "workspace:*",
-    "@ant-design/icons": "latest",
-    "@vitejs/plugin-react": "latest",
-    "antd": "latest",
-    "electron": "latest",
+    "@node-rs/argon2": "^2.1.0",
+    "electron-updater": "^6.8.9",
     "fastify": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "react-router-dom": "latest",
-    "vite": "latest"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@ant-design/icons": "latest",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "@xyflow/react": "^12.11.3",
+    "antd": "latest",
+    "electron": "43.4.0",
+    "electron-builder": "^26.15.3",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-router-dom": "latest",
     "typescript": "latest",
+    "vite": "latest",
     "vitest": "latest"
+  },
+  "optionalDependencies": {
+    "@node-rs/argon2-darwin-arm64": "2.1.0",
+    "@node-rs/argon2-darwin-x64": "2.1.0",
+    "@node-rs/argon2-win32-x64-msvc": "2.1.0"
+  },
+  "build": {
+    "appId": "io.datamaker.desktop",
+    "productName": "DataMaker",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "publish": {
+      "provider": "github",
+      "owner": "clarke0922",
+      "repo": "DataMaker",
+      "releaseType": "release"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "sign": false
+    }
   }
 }

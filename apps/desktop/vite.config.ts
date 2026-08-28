@@ -1,14 +1,14 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import path from 'node:path';
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import path from "node:path";
 
 export default defineConfig({
-  root: path.resolve(import.meta.dirname, 'src/renderer'),
+  root: path.resolve(import.meta.dirname, "src/renderer"),
   plugins: [react()],
-  base: './',
+  base: "./",
   build: {
-    outDir: path.resolve(import.meta.dirname, 'dist/renderer'),
-    emptyOutDir: true
+    outDir: path.resolve(import.meta.dirname, "dist/renderer"),
+    emptyOutDir: true,
   },
-  server: { port: 5173, strictPort: true }
+  server: { port: 5173, strictPort: true },
 });

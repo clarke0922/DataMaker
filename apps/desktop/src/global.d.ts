@@ -1,7 +1,9 @@
-import type { DesktopApi } from '@datamaker/contracts';
+import type { DesktopApi } from "@datamaker/contracts";
 
 declare global {
-  interface Window { datamaker: DesktopApi }
+  interface Window {
+    datamaker: DesktopApi;
+  }
 }
 
 export {};

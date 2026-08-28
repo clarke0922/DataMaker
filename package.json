@@ -7,6 +7,14 @@
     "dev": "pnpm --filter @datamaker/desktop dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "verify:legacy": "pnpm build && node apps/desktop/scripts/verify-legacy-import.mjs",
+    "verify:scale": "pnpm build && node apps/desktop/scripts/verify-scale.mjs",
+    "package:dir": "pnpm --filter @datamaker/desktop run package:dir",
+    "dist:win": "pnpm --filter @datamaker/desktop dist:win",
+    "dist:mac": "pnpm --filter @datamaker/desktop dist:mac"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.6"
   }
 }
