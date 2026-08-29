@@ -4,6 +4,9 @@ import type {
   AuditLogDto,
   AuditLogPageDto,
   AuditLogQuery,
+  AuditStatisticsQuery,
+  AuditStatisticsRowDto,
+  ChangePasswordInput,
   DataSourceDto,
   ExportDictionaryInput,
   ExportTaskDto,
@@ -36,6 +39,7 @@ import type {
   SystemInfoDto,
   TaskDto,
   UpdateMetadataObjectInput,
+  UpdateProfileInput,
   UpdateQualityResultInput,
   UpdateQualityRuleInput,
   UserDto,
@@ -228,6 +232,19 @@ export class ApplicationServices {
         this.audit.runAs(session.user.id, () =>
           this.audit.record("auth.logout", "user", session.user.id, "success"),
         );
+    });
+  }
+  updateProfile(userId: string, input: UpdateProfileInput): ApiResult<UserDto> {
+    return this.mutation("auth.profile.update", "user", userId, () => {
+      const user = this.access.updateProfile(userId, input);
+      this.auth.refreshUser(user);
+      return user;
+    });
+  }
+  changePassword(userId: string, input: ChangePasswordInput): ApiResult<void> {
+    return this.mutation("auth.password.change", "user", userId, () => {
+      this.access.changePassword(userId, input);
+      this.auth.revokeUser(userId);
     });
   }
   authorize(token: string | undefined, permission?: string) {
@@ -543,6 +560,9 @@ export class ApplicationServices {
   }
   auditList(query: AuditLogQuery = {}): ApiResult<AuditLogPageDto> {
     return attempt(() => this.audit.list(query));
+  }
+  auditStatistics(query: AuditStatisticsQuery): ApiResult<AuditStatisticsRowDto[]> {
+    return attempt(() => this.audit.statistics(query));
   }
   listUsers(): ApiResult<UserDto[]> {
     return attempt(() => this.access.listUsers());

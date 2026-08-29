@@ -175,7 +175,13 @@ const MIGRATION_V8 = `
 ALTER TABLE rule_results ADD COLUMN run_id TEXT REFERENCES rule_runs(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_rule_results_run_created ON rule_results(run_id,created_at DESC);
 `;
-export const CURRENT_SCHEMA_VERSION = 8;
+const MIGRATION_V9 = `
+ALTER TABLE users ADD COLUMN gender TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN contact TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+`;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 export class MetadataDatabase {
   readonly db: DatabaseSync;
@@ -219,6 +225,7 @@ export class MetadataDatabase {
       this.applyMigration(6, "source-status-v6", MIGRATION_V6);
       this.applyMigration(7, "quality-resolution-v7", MIGRATION_V7);
       this.applyMigration(8, "quality-result-history-v8", MIGRATION_V8);
+      this.applyMigration(9, "user-profile-v9", MIGRATION_V9);
       this.seedRules();
     } catch (error) {
       this.db.close();

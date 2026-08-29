@@ -63,6 +63,39 @@ const FactorManagementPage = lazy(() =>
     default: module.FactorManagementPage,
   })),
 );
+const TableManagementPage = lazy(() =>
+  import("./TableManagementPage").then((module) => ({
+    default: module.TableManagementPage,
+  })),
+);
+const DailyCountsPage = lazy(() =>
+  import("./DailyCountsPage").then((module) => ({
+    default: module.DailyCountsPage,
+  })),
+);
+const OrganizationManagementPage = lazy(() =>
+  import("./OrganizationManagementPage").then((module) => ({
+    default: module.OrganizationManagementPage,
+  })),
+);
+const OperationStatisticsPage = lazy(() =>
+  import("./OperationStatisticsPage").then((module) => ({
+    default: module.OperationStatisticsPage,
+  })),
+);
+const CategoryManagementPage = lazy(() =>
+  import("./CategoryManagementPage").then((module) => ({
+    default: module.CategoryManagementPage,
+  })),
+);
+const SystemTypeManagementPage = lazy(() =>
+  import("./SystemTypeManagementPage").then((module) => ({
+    default: module.SystemTypeManagementPage,
+  })),
+);
+const ProfilePage = lazy(() =>
+  import("./ProfilePage").then((module) => ({ default: module.ProfilePage })),
+);
 const AccessManagementPage = lazy(() =>
   import("./AccessManagementPage").then((module) => ({
     default: module.AccessManagementPage,
@@ -123,6 +156,7 @@ function Workspace({
   const [hits, setHits] = useState<SearchHitDto[]>([]);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string>("dashboard");
+  const [currentUser, setCurrentUser] = useState(session.user);
   const specs = getManagementSpecs(t);
   const can = (permission: string) => session.permissions.includes(permission);
   const canReadMetadata = can("metadata:read");
@@ -161,11 +195,24 @@ function Workspace({
       label: t("Daily Counts"),
     },
     { key: "cubes", icon: <ApartmentOutlined />, label: t("Data Cubes") },
-    { key: "categories", icon: <TagsOutlined />, label: t("Table Categories") },
+    { key: "categories", icon: <TagsOutlined />, label: t("Table Types") },
   ];
   const systemChildren = [
+    ...(canReadMetadata
+      ? [
+          {
+            key: "systemTypes",
+            icon: <TagsOutlined />,
+            label: t("System Types"),
+          },
+        ]
+      : []),
     ...(can("system:user_manage")
-      ? [{ key: "users", icon: <UserOutlined />, label: t("User Management") }]
+      ? [
+          { key: "organizations", icon: <ApartmentOutlined />, label: t("Organization Management") },
+          { key: "users", icon: <UserOutlined />, label: t("User Management") },
+          { key: "operationStatistics", icon: <BarChartOutlined />, label: t("Operation Statistics") },
+        ]
       : []),
     ...(can("system:user_manage") || can("export:create")
       ? [
@@ -285,10 +332,12 @@ function Workspace({
           <Typography.Title level={4}>
             {selected in specs
               ? specs[selected as ManagementModule].title
-              : ["users", "roles", "permissions"].includes(selected)
-                ? t(
+                : ["users", "roles", "permissions", "operationStatistics"].includes(selected)
+                  ? t(
                     selected === "users"
                       ? "User Management"
+                      : selected === "operationStatistics"
+                        ? "Operation Statistics"
                       : selected === "roles"
                         ? "Role Management"
                         : "Permission Management",
@@ -316,8 +365,15 @@ function Workspace({
                 { value: "zh-CN", label: t("Chinese") },
               ]}
             />
+            <Button
+              type="text"
+              icon={<UserOutlined />}
+              onClick={() => setSelected("profile")}
+            >
+              {currentUser.displayName}
+            </Button>
             <Button type="text" onClick={onLogout}>
-              {session.user.displayName} · {t("Sign out")}
+              {t("Sign out")}
             </Button>
           </div>
         </Layout.Header>
@@ -343,7 +399,13 @@ function Workspace({
               </div>
             }
           >
-            {selected === "search" ? (
+            {selected === "profile" ? (
+              <ProfilePage
+                user={currentUser}
+                onUpdated={setCurrentUser}
+                onPasswordChanged={onLogout}
+              />
+            ) : selected === "search" ? (
               <GlobalSearchPage />
             ) : selected === "audit" ? (
               <AuditPage
@@ -367,6 +429,21 @@ function Workspace({
               />
             ) : selected === "factors" ? (
               <FactorManagementPage canManage={canManageMetadata} />
+            ) : selected === "tables" || selected === "privateTables" ? (
+              <TableManagementPage
+                privateOnly={selected === "privateTables"}
+                canManage={canManageMetadata}
+              />
+            ) : selected === "dailyCounts" ? (
+              <DailyCountsPage canManage={canManageMetadata} />
+            ) : selected === "categories" ? (
+              <CategoryManagementPage canManage={canManageMetadata} />
+            ) : selected === "systemTypes" ? (
+              <SystemTypeManagementPage canManage={canManageMetadata} />
+            ) : selected === "organizations" ? (
+              <OrganizationManagementPage canManage={can("system:user_manage")} />
+            ) : selected === "operationStatistics" ? (
+              <OperationStatisticsPage />
             ) : selected in specs ? (
               <ManagementPage
                 module={selected as ManagementModule}
@@ -375,6 +452,8 @@ function Workspace({
             ) : ["users", "roles", "permissions"].includes(selected) ? (
               <AccessManagementPage
                 section={selected as "users" | "roles" | "permissions"}
+                currentUserId={session.user.id}
+                onSessionInvalidated={onLogout}
               />
             ) : (
               <WelcomePage info={info} stats={stats} onNavigate={setSelected} />

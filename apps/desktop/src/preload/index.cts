@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   DesktopApi,
   AuditLogQuery,
+  AuditStatisticsQuery,
+  ChangePasswordInput,
   ExportDictionaryInput,
   LoginInput,
   ManagementModule,
@@ -14,6 +16,7 @@ import type {
   SaveRoleInput,
   SaveUserInput,
   UpdateMetadataObjectInput,
+  UpdateProfileInput,
   UpdateQualityResultInput,
   UpdateQualityRuleInput,
 } from "@datamaker/contracts";
@@ -25,6 +28,8 @@ const channels = {
   authLogin: "auth:login",
   authLogout: "auth:logout",
   authSession: "auth:session",
+  authUpdateProfile: "auth:update-profile",
+  authChangePassword: "auth:change-password",
   systemInfo: "system:info",
   systemChooseImportFile: "system:choose-import-file",
   systemSaveTextFile: "system:save-text-file",
@@ -70,6 +75,7 @@ const channels = {
   exportsTasks: "exports:tasks",
   exportsCancelTask: "exports:cancel-task",
   auditList: "audit:list",
+  auditStatistics: "audit:statistics",
   accessListUsers: "access:users:list",
   accessSaveUser: "access:users:save",
   accessRemoveUser: "access:users:remove",
@@ -106,6 +112,10 @@ const api: DesktopApi = Object.freeze({
       return result;
     },
     session: () => ipcRenderer.invoke(channels.authSession, sessionToken),
+    updateProfile: (input: UpdateProfileInput) =>
+      invoke(channels.authUpdateProfile, input),
+    changePassword: (input: ChangePasswordInput) =>
+      invoke(channels.authChangePassword, input),
   }),
   system: Object.freeze({
     info: () => ipcRenderer.invoke(channels.systemInfo),
@@ -178,6 +188,7 @@ const api: DesktopApi = Object.freeze({
   }),
   audit: Object.freeze({
     list: (query?: AuditLogQuery) => invoke(channels.auditList, query ?? {}),
+    statistics: (query: AuditStatisticsQuery) => invoke(channels.auditStatistics, query),
   }),
   access: Object.freeze({
     listUsers: () => invoke(channels.accessListUsers),

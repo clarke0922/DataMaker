@@ -9,6 +9,9 @@ import type {
 } from "@datamaker/contracts";
 import * as XLSX from "xlsx";
 
+const sqlValue = (value: unknown): SQLInputValue =>
+  typeof value === "boolean" ? Number(value) : (value as SQLInputValue);
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS column_weights (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, score INTEGER NOT NULL CHECK(score BETWEEN 0 AND 100), display_order INTEGER NOT NULL DEFAULT 0
@@ -49,10 +52,22 @@ CREATE TABLE IF NOT EXISTS table_categories (
 );
 CREATE TABLE IF NOT EXISTS managed_data_tables (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, category_id TEXT REFERENCES table_categories(id) ON DELETE SET NULL,
+  parent_id TEXT REFERENCES managed_data_tables(id) ON DELETE SET NULL, source_table_id TEXT REFERENCES meta_tables(id) ON DELETE SET NULL,
   table_type TEXT NOT NULL DEFAULT 'business', is_tree INTEGER NOT NULL DEFAULT 0 CHECK(is_tree IN (0,1)),
   is_internal INTEGER NOT NULL DEFAULT 1 CHECK(is_internal IN (0,1)), is_public INTEGER NOT NULL DEFAULT 1 CHECK(is_public IN (0,1)),
   owner TEXT, row_count INTEGER NOT NULL DEFAULT 0, is_search_indexed INTEGER NOT NULL DEFAULT 0 CHECK(is_search_indexed IN (0,1)),
-  description TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  icon TEXT, display_order INTEGER NOT NULL DEFAULT 0, description TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS managed_table_columns (
+  id TEXT PRIMARY KEY, table_id TEXT NOT NULL REFERENCES managed_data_tables(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, display_name TEXT NOT NULL, data_type TEXT NOT NULL,
+  length INTEGER, precision INTEGER, nullable INTEGER NOT NULL DEFAULT 1 CHECK(nullable IN (0,1)),
+  is_primary_key INTEGER NOT NULL DEFAULT 0 CHECK(is_primary_key IN (0,1)), is_pinyin INTEGER NOT NULL DEFAULT 0 CHECK(is_pinyin IN (0,1)),
+  is_tree_display INTEGER NOT NULL DEFAULT 0 CHECK(is_tree_display IN (0,1)), is_multiple INTEGER NOT NULL DEFAULT 0 CHECK(is_multiple IN (0,1)),
+  dictionary_name TEXT, weight INTEGER NOT NULL DEFAULT 0, display_order INTEGER NOT NULL DEFAULT 0,
+  show_in_list INTEGER NOT NULL DEFAULT 1 CHECK(show_in_list IN (0,1)), searchable INTEGER NOT NULL DEFAULT 0 CHECK(searchable IN (0,1)),
+  title_column INTEGER NOT NULL DEFAULT 0 CHECK(title_column IN (0,1)), group_required INTEGER NOT NULL DEFAULT 0 CHECK(group_required IN (0,1)),
+  UNIQUE(table_id,name)
 );
 CREATE TABLE IF NOT EXISTS daily_table_counts (
   id TEXT PRIMARY KEY, table_id TEXT REFERENCES managed_data_tables(id) ON DELETE CASCADE, table_name TEXT NOT NULL,
@@ -61,6 +76,17 @@ CREATE TABLE IF NOT EXISTS daily_table_counts (
 CREATE TABLE IF NOT EXISTS data_cubes (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT, definition_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS system_types (
+  id TEXT PRIMARY KEY, code TEXT NOT NULL COLLATE NOCASE UNIQUE, name TEXT NOT NULL, type_group TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY, code TEXT NOT NULL COLLATE NOCASE UNIQUE, name TEXT NOT NULL,
+  full_name TEXT NOT NULL, parent_id TEXT REFERENCES organizations(id) ON DELETE RESTRICT,
+  contact TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', postal_code TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '', display_order INTEGER NOT NULL DEFAULT 0,
+  registered_by TEXT NOT NULL DEFAULT 'local', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_organizations_parent_order ON organizations(parent_id, display_order, name);
 `;
 
 type Config = {
@@ -180,6 +206,21 @@ const configs: Record<ManagementModule, Config> = {
     required: ["name"],
     order: "level_path, display_order, name",
   },
+  organizations: {
+    table: "organizations",
+    columns: [
+      "code", "name", "full_name", "parent_id", "contact", "address",
+      "postal_code", "email", "display_order", "registered_by", "created_at", "updated_at",
+    ],
+    required: ["code", "name"],
+    order: "full_name, display_order, name",
+  },
+  systemTypes: {
+    table: "system_types",
+    columns: ["code", "name", "type_group", "created_at", "updated_at"],
+    required: ["code", "name"],
+    order: "type_group, code COLLATE NOCASE",
+  },
   dictionaryDefinitions: {
     table: "dictionary_definitions",
     columns: [
@@ -217,6 +258,26 @@ const configFor = (module: ManagementModule) => {
 export class MetadataManagementRepository {
   constructor(private readonly db: DatabaseSync) {
     db.exec(SCHEMA);
+    const tableColumns = new Set(
+      (
+        db.prepare("PRAGMA table_info('managed_data_tables')").all() as Array<{
+          name: string;
+        }>
+      ).map((column) => column.name),
+    );
+    for (const [name, definition] of [
+      [
+        "parent_id",
+        "TEXT REFERENCES managed_data_tables(id) ON DELETE SET NULL",
+      ],
+      ["source_table_id", "TEXT REFERENCES meta_tables(id) ON DELETE SET NULL"],
+      ["icon", "TEXT"],
+      ["display_order", "INTEGER NOT NULL DEFAULT 0"],
+    ] as const)
+      if (!tableColumns.has(name))
+        db.exec(
+          `ALTER TABLE managed_data_tables ADD COLUMN ${name} ${definition}`,
+        );
     this.seed();
   }
 
@@ -260,6 +321,13 @@ export class MetadataManagementRepository {
            FROM metadata_factors factor ORDER BY factor.name`,
         )
         .all() as unknown as ManagementRecordDto[];
+    if (module === "tables" || module === "privateTables")
+      return this.listManagedTables(module === "privateTables");
+    if (module === "organizations")
+      return this.db.prepare(`SELECT organization.*, parent.name parent_name,
+        (SELECT COUNT(*) FROM organizations child WHERE child.parent_id = organization.id) child_count
+        FROM organizations organization LEFT JOIN organizations parent ON parent.id = organization.parent_id
+        ORDER BY organization.full_name, organization.display_order, organization.name`).all() as unknown as ManagementRecordDto[];
     const where = config.fixed
       ? ` WHERE ${Object.keys(config.fixed)
           .map((key) => `${key} = ?`)
@@ -278,6 +346,12 @@ export class MetadataManagementRepository {
     input: SaveManagementRecordInput,
   ): ManagementRecordDto {
     if (module === "factors") return this.saveFactor(input);
+    if (module === "tables" || module === "privateTables")
+      return this.saveManagedTable(input, module === "privateTables");
+    if (module === "dailyCounts") return this.saveDailyCount(input);
+    if (module === "categories") return this.saveCategory(input);
+    if (module === "systemTypes") return this.saveSystemType(input);
+    if (module === "organizations") return this.saveOrganization(input);
     const config = configFor(module);
     const now = new Date().toISOString();
     const existing = input.id
@@ -386,6 +460,310 @@ export class MetadataManagementRepository {
     return this.db
       .prepare(`SELECT * FROM ${config.table} WHERE id = ?`)
       .get(id) as unknown as ManagementRecordDto;
+  }
+
+  private saveSystemType(
+    input: SaveManagementRecordInput,
+  ): ManagementRecordDto {
+    const existing = input.id
+      ? (this.db
+          .prepare("SELECT * FROM system_types WHERE id = ?")
+          .get(input.id) as Record<string, unknown> | undefined)
+      : undefined;
+    if (input.id && !existing) throw new Error("Record not found");
+    const code = String(input.values.code ?? existing?.code ?? "")
+      .trim()
+      .toUpperCase();
+    const name = String(input.values.name ?? existing?.name ?? "").trim();
+    const group = String(
+      input.values.type_group ?? existing?.type_group ?? "",
+    ).trim();
+    if (!code || !name) throw new Error("Type code and name are required");
+    if (code.length > 20 || name.length > 30 || group.length > 20)
+      throw new Error("System type field length exceeds the allowed limit");
+    const id = input.id ?? randomUUID();
+    const now = new Date().toISOString();
+    if (existing)
+      this.db
+        .prepare(
+          "UPDATE system_types SET code=?,name=?,type_group=?,updated_at=? WHERE id=?",
+        )
+        .run(code, name, group, now, id);
+    else
+      this.db
+        .prepare(
+          "INSERT INTO system_types(id,code,name,type_group,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+        )
+        .run(id, code, name, group, now, now);
+    return this.db
+      .prepare("SELECT * FROM system_types WHERE id=?")
+      .get(id) as unknown as ManagementRecordDto;
+  }
+
+  private saveCategory(input: SaveManagementRecordInput): ManagementRecordDto {
+    const existing = input.id
+      ? (this.db
+          .prepare("SELECT * FROM table_categories WHERE id = ?")
+          .get(input.id) as Record<string, unknown> | undefined)
+      : undefined;
+    if (input.id && !existing) throw new Error("Record not found");
+    const name = String(input.values.name ?? existing?.name ?? "").trim();
+    if (!name) throw new Error("Field name is required");
+    const parentId = input.id
+      ? (existing?.parent_id as string | null)
+      : input.values.parent_id
+        ? String(input.values.parent_id)
+        : null;
+    const parent = parentId
+      ? (this.db
+          .prepare("SELECT id, level_path FROM table_categories WHERE id = ?")
+          .get(parentId) as { id: string; level_path: string } | undefined)
+      : undefined;
+    if (parentId && !parent) throw new Error("Parent category not found");
+    const order = Number(
+      input.values.display_order ?? existing?.display_order ?? 0,
+    );
+    if (!Number.isSafeInteger(order))
+      throw new Error("Order must be an integer");
+    const id = input.id ?? randomUUID();
+    if (existing) {
+      this.db
+        .prepare(
+          "UPDATE table_categories SET name = ?, display_order = ? WHERE id = ?",
+        )
+        .run(name, order, id);
+    } else {
+      this.db
+        .prepare(
+          "INSERT INTO table_categories(id,name,parent_id,level_path,display_order,created_at) VALUES(?,?,?,?,?,?)",
+        )
+        .run(
+          id,
+          name,
+          parentId,
+          parent ? `${parent.level_path}${parent.id}/` : "/",
+          order,
+          new Date().toISOString(),
+        );
+    }
+    return this.db
+      .prepare("SELECT * FROM table_categories WHERE id = ?")
+      .get(id) as unknown as ManagementRecordDto;
+  }
+
+  private saveDailyCount(
+    input: SaveManagementRecordInput,
+  ): ManagementRecordDto {
+    const existing = input.id
+      ? (this.db
+          .prepare("SELECT * FROM daily_table_counts WHERE id=?")
+          .get(input.id) as Record<string, SQLInputValue> | undefined)
+      : undefined;
+    if (input.id && !existing) throw new Error("Record not found");
+    const values = { ...existing, ...input.values };
+    const tableId = String(values.table_id ?? "").trim() || null;
+    const managed = tableId
+      ? (this.db
+          .prepare("SELECT name FROM managed_data_tables WHERE id=?")
+          .get(tableId) as { name: string } | undefined)
+      : undefined;
+    if (tableId && !managed) throw new Error("Managed table not found");
+    const tableName = managed?.name ?? String(values.table_name ?? "").trim();
+    const statDate = String(values.stat_date ?? "").slice(0, 10);
+    const increase = Number(values.daily_increase ?? 0);
+    const total = Number(values.total_count ?? 0);
+    if (!tableName) throw new Error("Table name is required");
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(statDate) ||
+      Number.isNaN(Date.parse(statDate))
+    )
+      throw new Error("Statistics date is invalid");
+    if (
+      !Number.isSafeInteger(increase) ||
+      !Number.isSafeInteger(total) ||
+      total < 0
+    )
+      throw new Error("Count values are invalid");
+    const id = input.id ?? randomUUID();
+    if (existing)
+      this.db
+        .prepare(
+          "UPDATE daily_table_counts SET table_id=?,table_name=?,daily_increase=?,total_count=?,stat_date=? WHERE id=?",
+        )
+        .run(tableId, tableName, increase, total, statDate, id);
+    else
+      this.db
+        .prepare(
+          "INSERT INTO daily_table_counts(id,table_id,table_name,daily_increase,total_count,stat_date) VALUES(?,?,?,?,?,?)",
+        )
+        .run(id, tableId, tableName, increase, total, statDate);
+    return this.db
+      .prepare("SELECT * FROM daily_table_counts WHERE id=?")
+      .get(id) as unknown as ManagementRecordDto;
+  }
+
+  private listManagedTables(privateOnly: boolean): ManagementRecordDto[] {
+    return this.db
+      .prepare(
+        `SELECT table_object.*,
+         category.name category_name, parent.name parent_name,
+         COALESCE((SELECT json_group_array(json_object(
+           'id',column_object.id,'name',column_object.name,'display_name',column_object.display_name,
+           'data_type',column_object.data_type,'length',column_object.length,'precision',column_object.precision,
+           'nullable',column_object.nullable,'is_primary_key',column_object.is_primary_key,'is_pinyin',column_object.is_pinyin,
+           'is_tree_display',column_object.is_tree_display,'is_multiple',column_object.is_multiple,
+           'dictionary_name',column_object.dictionary_name,'weight',column_object.weight,'display_order',column_object.display_order,
+           'show_in_list',column_object.show_in_list,'searchable',column_object.searchable,
+           'title_column',column_object.title_column,'group_required',column_object.group_required
+         )) FROM managed_table_columns column_object WHERE column_object.table_id=table_object.id ORDER BY column_object.display_order),'[]') columns_json
+         FROM managed_data_tables table_object
+         LEFT JOIN table_categories category ON category.id=table_object.category_id
+         LEFT JOIN managed_data_tables parent ON parent.id=table_object.parent_id
+         ${privateOnly ? "WHERE table_object.is_public=0" : ""}
+         ORDER BY table_object.display_order,table_object.display_name`,
+      )
+      .all() as unknown as ManagementRecordDto[];
+  }
+
+  private saveManagedTable(
+    input: SaveManagementRecordInput,
+    privateOnly: boolean,
+  ): ManagementRecordDto {
+    const existing = input.id
+      ? (this.db
+          .prepare("SELECT * FROM managed_data_tables WHERE id=?")
+          .get(input.id) as Record<string, SQLInputValue> | undefined)
+      : undefined;
+    if (input.id && !existing) throw new Error("Record not found");
+    const values = { ...existing, ...input.values };
+    const name = String(values.name ?? "").trim();
+    const displayName = String(values.display_name ?? "").trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name))
+      throw new Error("Physical table name is invalid");
+    if (!displayName || displayName.length > 100)
+      throw new Error("Display name must contain 1 to 100 characters");
+    if (input.id && values.parent_id === input.id)
+      throw new Error("A table cannot be its own parent");
+    let columns: Array<Record<string, unknown>> | undefined;
+    if (input.values.columns_json !== undefined) {
+      try {
+        const parsed = JSON.parse(String(input.values.columns_json));
+        if (!Array.isArray(parsed)) throw new Error();
+        columns = parsed;
+      } catch {
+        throw new Error("Table fields are invalid");
+      }
+      const names = columns.map((column) => String(column.name ?? "").trim());
+      if (
+        names.some((column) => !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(column)) ||
+        new Set(names.map((column) => column.toLowerCase())).size !==
+          names.length
+      )
+        throw new Error("Field names must be valid and unique");
+      if (columns.some((column) => !String(column.display_name ?? "").trim()))
+        throw new Error("Field display name is required");
+    }
+    const id = input.id ?? randomUUID();
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN");
+    try {
+      if (existing)
+        this.db
+          .prepare(
+            `UPDATE managed_data_tables SET name=?,display_name=?,category_id=?,parent_id=?,source_table_id=?,table_type=?,is_tree=?,is_internal=?,is_public=?,owner=?,row_count=?,is_search_indexed=?,icon=?,display_order=?,description=?,updated_at=? WHERE id=?`,
+          )
+          .run(
+            ...[
+              name,
+              displayName,
+              values.category_id || null,
+              values.parent_id || null,
+              values.source_table_id || null,
+              values.table_type || "business",
+              Number(Boolean(values.is_tree)),
+              Number(Boolean(values.is_internal)),
+              privateOnly ? 0 : Number(values.is_public ?? 1),
+              values.owner || null,
+              Number(values.row_count ?? 0),
+              Number(Boolean(values.is_search_indexed)),
+              values.icon || null,
+              Number(values.display_order ?? 0),
+              values.description || null,
+              now,
+              id,
+            ].map(sqlValue),
+          );
+      else
+        this.db
+          .prepare(
+            `INSERT INTO managed_data_tables(id,name,display_name,category_id,parent_id,source_table_id,table_type,is_tree,is_internal,is_public,owner,row_count,is_search_indexed,icon,display_order,description,created_at,updated_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          )
+          .run(
+            ...[
+              id,
+              name,
+              displayName,
+              values.category_id || null,
+              values.parent_id || null,
+              values.source_table_id || null,
+              values.table_type || "business",
+              Number(Boolean(values.is_tree)),
+              Number(Boolean(values.is_internal ?? 1)),
+              privateOnly ? 0 : Number(values.is_public ?? 1),
+              values.owner || null,
+              Number(values.row_count ?? 0),
+              Number(Boolean(values.is_search_indexed)),
+              values.icon || null,
+              Number(values.display_order ?? 0),
+              values.description || null,
+              now,
+              now,
+            ].map(sqlValue),
+          );
+      if (columns) {
+        this.db
+          .prepare("DELETE FROM managed_table_columns WHERE table_id=?")
+          .run(id);
+        const insert = this.db.prepare(
+          `INSERT INTO managed_table_columns(id,table_id,name,display_name,data_type,length,precision,nullable,is_primary_key,is_pinyin,is_tree_display,is_multiple,dictionary_name,weight,display_order,show_in_list,searchable,title_column,group_required)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        );
+        for (const [index, column] of columns.entries())
+          insert.run(
+            ...[
+              String(column.id ?? randomUUID()),
+              id,
+              String(column.name).trim(),
+              String(column.display_name).trim(),
+              String(column.data_type ?? "varchar"),
+              column.length === null || column.length === ""
+                ? null
+                : Number(column.length ?? 32),
+              column.precision === null || column.precision === ""
+                ? null
+                : Number(column.precision ?? 0),
+              Number(Boolean(column.nullable ?? 1)),
+              Number(Boolean(column.is_primary_key)),
+              Number(Boolean(column.is_pinyin)),
+              Number(Boolean(column.is_tree_display)),
+              Number(Boolean(column.is_multiple)),
+              column.dictionary_name || null,
+              Number(column.weight ?? 0),
+              Number(column.display_order ?? index),
+              Number(Boolean(column.show_in_list ?? 1)),
+              Number(Boolean(column.searchable)),
+              Number(Boolean(column.title_column)),
+              Number(Boolean(column.group_required)),
+            ].map(sqlValue),
+          );
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return this.listManagedTables(privateOnly).find((item) => item.id === id)!;
   }
 
   private saveFactor(input: SaveManagementRecordInput): ManagementRecordDto {
@@ -568,8 +946,85 @@ export class MetadataManagementRepository {
     }
   }
 
+  private saveOrganization(input: SaveManagementRecordInput): ManagementRecordDto {
+    const existing = input.id
+      ? this.db.prepare("SELECT * FROM organizations WHERE id = ?").get(input.id) as Record<string, unknown> | undefined
+      : undefined;
+    if (input.id && !existing) throw new Error("Organization not found");
+    const values = { ...existing, ...input.values };
+    const code = String(values.code ?? "").trim().toUpperCase();
+    const name = String(values.name ?? "").trim();
+    const parentId = values.parent_id ? String(values.parent_id) : null;
+    if (!/^[A-Z0-9_-]{1,3}$/.test(code))
+      throw new Error("Organization code must be 1-3 letters, numbers, underscores, or hyphens");
+    if (!name || name.length > 100) throw new Error("Organization name must be 1-100 characters");
+    if (parentId === input.id) throw new Error("An organization cannot be its own parent");
+    const parent = parentId
+      ? this.db.prepare("SELECT id, full_name FROM organizations WHERE id = ?").get(parentId) as { id: string; full_name: string } | undefined
+      : undefined;
+    if (parentId && !parent) throw new Error("Parent organization not found");
+    if (input.id && parentId && this.db.prepare(`WITH RECURSIVE descendants(id) AS (
+      SELECT id FROM organizations WHERE parent_id = ? UNION ALL
+      SELECT child.id FROM organizations child JOIN descendants parent ON child.parent_id = parent.id
+    ) SELECT 1 FROM descendants WHERE id = ?`).get(input.id, parentId))
+      throw new Error("An organization cannot be moved below its descendant");
+    const email = String(values.email ?? "").trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Email address is invalid");
+    const postalCode = String(values.postal_code ?? "").trim();
+    if (postalCode.length > 6) throw new Error("Postal code cannot exceed 6 characters");
+    const fullName = parent ? `${parent.full_name} / ${name}` : name;
+    const now = new Date().toISOString();
+    const id = input.id ?? randomUUID();
+    const params = [
+      code, name, fullName, parentId, String(values.contact ?? "").trim(),
+      String(values.address ?? "").trim(), postalCode, email,
+      Number(values.display_order ?? 0), String(values.registered_by ?? "local"), now,
+    ];
+    this.db.exec("BEGIN");
+    try {
+      if (existing)
+        this.db.prepare(`UPDATE organizations SET code=?,name=?,full_name=?,parent_id=?,contact=?,address=?,postal_code=?,email=?,display_order=?,registered_by=?,updated_at=? WHERE id=?`).run(...params, id);
+      else
+        this.db.prepare(`INSERT INTO organizations(code,name,full_name,parent_id,contact,address,postal_code,email,display_order,registered_by,created_at,updated_at,id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...params.slice(0, 10), now, now, id);
+      this.refreshOrganizationChildren(id, fullName, now);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return this.list("organizations").find((item) => item.id === id)!;
+  }
+
+  private refreshOrganizationChildren(parentId: string, parentFullName: string, now: string) {
+    const children = this.db.prepare("SELECT id, name FROM organizations WHERE parent_id = ?").all(parentId) as Array<{ id: string; name: string }>;
+    for (const child of children) {
+      const fullName = `${parentFullName} / ${child.name}`;
+      this.db.prepare("UPDATE organizations SET full_name = ?, updated_at = ? WHERE id = ?").run(fullName, now, child.id);
+      this.refreshOrganizationChildren(child.id, fullName, now);
+    }
+  }
+
   remove(module: ManagementModule, id: string) {
     const config = configFor(module);
+    if (module === "categories") {
+      if (
+        this.db
+          .prepare("SELECT 1 FROM table_categories WHERE parent_id = ? LIMIT 1")
+          .get(id)
+      )
+        throw new Error("Categories with child categories cannot be deleted");
+      if (
+        this.db
+          .prepare(
+            "SELECT 1 FROM managed_data_tables WHERE category_id = ? LIMIT 1",
+          )
+          .get(id)
+      )
+        throw new Error("Categories containing data tables cannot be deleted");
+    }
+    if (module === "organizations" && this.db
+      .prepare("SELECT 1 FROM organizations WHERE parent_id = ? LIMIT 1").get(id))
+      throw new Error("Organizations with child organizations cannot be deleted");
     const result = this.db
       .prepare(`DELETE FROM ${config.table} WHERE id = ?`)
       .run(id);

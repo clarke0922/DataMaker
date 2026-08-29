@@ -4,6 +4,8 @@ import type {
   AuditLogDto,
   AuditLogPageDto,
   AuditLogQuery,
+  AuditStatisticsQuery,
+  AuditStatisticsRowDto,
 } from "@datamaker/contracts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
@@ -123,6 +125,14 @@ export class AuditRepository {
       conditions.push("log.result=?");
       params.push(query.result);
     }
+    if (query.from) {
+      conditions.push("log.occurred_at >= ?");
+      params.push(query.from);
+    }
+    if (query.to) {
+      conditions.push("log.occurred_at <= ?");
+      params.push(query.to);
+    }
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const from = `FROM audit_logs log LEFT JOIN users user ON user.id=log.actor_user_id ${where}`;
     const total = Number(
@@ -142,5 +152,33 @@ export class AuditRepository {
         (page - 1) * pageSize,
       ) as unknown as AuditLogDto[];
     return { items, total, page, pageSize };
+  }
+
+  statistics(query: AuditStatisticsQuery): AuditStatisticsRowDto[] {
+    const conditions = ["log.result = 'success'"];
+    const params: string[] = [];
+    if (query.from) {
+      conditions.push("log.occurred_at >= ?");
+      params.push(query.from);
+    }
+    if (query.to) {
+      conditions.push("log.occurred_at <= ?");
+      params.push(query.to);
+    }
+    const group = query.groupBy === "user"
+      ? "COALESCE(user.username, 'system')"
+      : "COALESCE(log.object_type, 'system')";
+    return this.db.prepare(`SELECT ${group} AS [group],
+      SUM(CASE WHEN log.action LIKE '%.create%' OR log.action LIKE '%.initialize%' THEN 1 ELSE 0 END) created,
+      SUM(CASE WHEN log.action LIKE '%.view%' OR log.action LIKE '%.read%' OR log.action LIKE '%.search%' THEN 1 ELSE 0 END) viewed,
+      SUM(CASE WHEN log.action LIKE '%.update%' OR log.action LIKE '%.save%' OR log.action LIKE '%.toggle%' THEN 1 ELSE 0 END) updated,
+      SUM(CASE WHEN log.action LIKE '%.delete%' OR log.action LIKE '%.remove%' THEN 1 ELSE 0 END) deleted,
+      SUM(CASE WHEN log.action NOT LIKE '%.create%' AND log.action NOT LIKE '%.initialize%'
+        AND log.action NOT LIKE '%.view%' AND log.action NOT LIKE '%.read%' AND log.action NOT LIKE '%.search%'
+        AND log.action NOT LIKE '%.update%' AND log.action NOT LIKE '%.save%' AND log.action NOT LIKE '%.toggle%'
+        AND log.action NOT LIKE '%.delete%' AND log.action NOT LIKE '%.remove%' THEN 1 ELSE 0 END) other,
+      COUNT(*) total
+      FROM audit_logs log LEFT JOIN users user ON user.id = log.actor_user_id
+      WHERE ${conditions.join(" AND ")} GROUP BY ${group} ORDER BY total DESC, [group]`).all(...params) as unknown as AuditStatisticsRowDto[];
   }
 }

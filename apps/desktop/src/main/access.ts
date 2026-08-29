@@ -7,11 +7,13 @@ import {
 import { Algorithm, hashRawSync } from "@node-rs/argon2";
 import type { DatabaseSync } from "node:sqlite";
 import type {
+  ChangePasswordInput,
   PermissionDto,
   RoleDto,
   SavePermissionInput,
   SaveRoleInput,
   SaveUserInput,
+  UpdateProfileInput,
   UserDto,
   UserStatus,
 } from "@datamaker/contracts";
@@ -172,7 +174,7 @@ export class AccessRepository {
   listUsers(): UserDto[] {
     const rows = this.db
       .prepare(
-        `SELECT id,username,display_name,status,failed_login_count,locked_until,created_at,updated_at FROM users ORDER BY username COLLATE NOCASE`,
+        `SELECT id,username,display_name,status,failed_login_count,locked_until,gender,contact,email,notes,created_at,updated_at FROM users ORDER BY username COLLATE NOCASE`,
       )
       .all() as Array<{
       id: string;
@@ -181,6 +183,10 @@ export class AccessRepository {
       status: UserStatus;
       failed_login_count: number;
       locked_until: string | null;
+      gender: string;
+      contact: string;
+      email: string;
+      notes: string;
       created_at: string;
       updated_at: string;
     }>;
@@ -197,6 +203,10 @@ export class AccessRepository {
       ),
       failedLoginCount: row.failed_login_count,
       lockedUntil: row.locked_until,
+      gender: row.gender,
+      contact: row.contact,
+      email: row.email,
+      notes: row.notes,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -210,16 +220,24 @@ export class AccessRepository {
     this.db.exec("BEGIN");
     try {
       if (input.id) {
-        if (!this.db.prepare("SELECT 1 FROM users WHERE id = ?").get(id))
-          throw new Error("User not found");
+        const current = this.db
+          .prepare("SELECT gender,contact,email,notes FROM users WHERE id = ?")
+          .get(id) as
+          | { gender: string; contact: string; email: string; notes: string }
+          | undefined;
+        if (!current) throw new Error("User not found");
         this.db
           .prepare(
-            "UPDATE users SET username=?,display_name=?,status=?,updated_at=? WHERE id=?",
+            "UPDATE users SET username=?,display_name=?,status=?,gender=?,contact=?,email=?,notes=?,updated_at=? WHERE id=?",
           )
           .run(
             input.username.trim(),
             input.displayName.trim(),
             input.status,
+            input.gender?.trim() ?? current.gender,
+            input.contact?.trim() ?? current.contact,
+            input.email?.trim() ?? current.email,
+            input.notes?.trim() ?? current.notes,
             now,
             id,
           );
@@ -238,7 +256,7 @@ export class AccessRepository {
           throw new Error("Password is required for new users");
         this.db
           .prepare(
-            "INSERT INTO users(id,username,password_hash,display_name,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO users(id,username,password_hash,display_name,status,gender,contact,email,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
           )
           .run(
             id,
@@ -246,6 +264,10 @@ export class AccessRepository {
             this.hashPassword(input.password),
             input.displayName.trim(),
             input.status,
+            input.gender?.trim() ?? "",
+            input.contact?.trim() ?? "",
+            input.email?.trim() ?? "",
+            input.notes?.trim() ?? "",
             now,
             now,
           );
@@ -292,6 +314,68 @@ export class AccessRepository {
       throw error;
     }
     return this.listUsers().find((user) => user.id === id)!;
+  }
+
+  updateProfile(userId: string, input: UpdateProfileInput) {
+    const displayName = input.displayName.trim();
+    const gender = input.gender.trim();
+    const contact = input.contact.trim();
+    const email = input.email.trim();
+    const notes = input.notes.trim();
+    if (!displayName || displayName.length > 50)
+      throw new Error("Display name must contain 1 to 50 characters");
+    if (
+      gender.length > 10 ||
+      contact.length > 100 ||
+      email.length > 200 ||
+      notes.length > 500
+    )
+      throw new Error("Profile field length exceeds the allowed limit");
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      throw new Error("Email address is invalid");
+    if (
+      !this.db
+        .prepare(
+          "UPDATE users SET display_name=?,gender=?,contact=?,email=?,notes=?,updated_at=? WHERE id=?",
+        )
+        .run(
+          displayName,
+          gender,
+          contact,
+          email,
+          notes,
+          new Date().toISOString(),
+          userId,
+        ).changes
+    )
+      throw new Error("User not found");
+    return this.listUsers().find((user) => user.id === userId)!;
+  }
+
+  changePassword(userId: string, input: ChangePasswordInput) {
+    if (input.currentPassword === input.newPassword)
+      throw new Error(
+        "New password must be different from the current password",
+      );
+    const user = this.db
+      .prepare("SELECT username FROM users WHERE id=?")
+      .get(userId) as { username: string } | undefined;
+    if (!user) throw new Error("User not found");
+    const authenticated = this.authenticate(
+      user.username,
+      input.currentPassword,
+    );
+    if (authenticated.user.id !== userId)
+      throw new Error("Invalid username or password");
+    this.db
+      .prepare(
+        "UPDATE users SET password_hash=?,failed_login_count=0,locked_until=NULL,updated_at=? WHERE id=?",
+      )
+      .run(
+        this.hashPassword(input.newPassword),
+        new Date().toISOString(),
+        userId,
+      );
   }
 
   removeUser(id: string) {
@@ -404,6 +488,12 @@ export class AccessRepository {
       .get(id) as { built_in: number } | undefined;
     if (!role) throw new Error("Role not found");
     if (role.built_in) throw new Error("Built-in roles cannot be deleted");
+    if (
+      this.db
+        .prepare("SELECT 1 FROM user_roles WHERE role_id=? LIMIT 1")
+        .get(id)
+    )
+      throw new Error("Roles assigned to users cannot be deleted");
     this.db.prepare("DELETE FROM roles WHERE id=?").run(id);
   }
 

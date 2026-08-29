@@ -10,6 +10,7 @@
     "test": "pnpm -r test",
     "verify:legacy": "pnpm build && node apps/desktop/scripts/verify-legacy-import.mjs",
     "verify:scale": "pnpm build && node apps/desktop/scripts/verify-scale.mjs",
+    "seed:demo": "pnpm build && node apps/desktop/scripts/seed-demo.mjs",
     "package:dir": "pnpm --filter @datamaker/desktop run package:dir",
     "dist:win": "pnpm --filter @datamaker/desktop dist:win",
     "dist:mac": "pnpm --filter @datamaker/desktop dist:mac"

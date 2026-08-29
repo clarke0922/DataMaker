@@ -24,7 +24,7 @@ describe("MetadataDatabase", () => {
     database.close();
   });
 
-  it("upgrades a version-three database through validated v4-v8 migrations", () => {
+  it("upgrades a version-three database through validated v4-v9 migrations", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "datamaker-v4-"));
     const file = path.join(directory, "meta.db");
     const original = new MetadataDatabase(file);
@@ -38,13 +38,17 @@ describe("MetadataDatabase", () => {
       DROP TABLE export_jobs;
       ALTER TABLE users DROP COLUMN locked_until;
       ALTER TABLE users DROP COLUMN failed_login_count;
+      ALTER TABLE users DROP COLUMN gender;
+      ALTER TABLE users DROP COLUMN contact;
+      ALTER TABLE users DROP COLUMN email;
+      ALTER TABLE users DROP COLUMN notes;
       ALTER TABLE data_sources DROP COLUMN last_error;
       ALTER TABLE rule_results DROP COLUMN resolved_by;
       ALTER TABLE rule_results DROP COLUMN resolved_at;
       ALTER TABLE rule_results DROP COLUMN resolution_note;
       ALTER TABLE rule_results DROP COLUMN status;
       ALTER TABLE rule_results DROP COLUMN run_id;
-      DELETE FROM schema_migrations WHERE version IN (4,5,6,7,8);
+      DELETE FROM schema_migrations WHERE version IN (4,5,6,7,8,9);
       DELETE FROM app_settings WHERE key='metadata.revision';
     `);
     original.close();
@@ -55,7 +59,7 @@ describe("MetadataDatabase", () => {
           .prepare("SELECT MAX(version) version FROM schema_migrations")
           .get() as { version: number }
       ).version,
-    ).toBe(8);
+    ).toBe(9);
     expect(
       upgraded.db
         .prepare(

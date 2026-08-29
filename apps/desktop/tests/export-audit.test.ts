@@ -5,6 +5,21 @@ import { QualityRepository } from "../src/main/quality.js";
 import { ExportRepository } from "../src/main/exports.js";
 import { AuditRepository } from "../src/main/audit.js";
 describe("export and audit", () => {
+  it("summarizes successful operations by object and user", () => {
+    const database = new MetadataDatabase(":memory:");
+    const audit = new AuditRepository(database.db);
+    database.db.exec("INSERT INTO users(id,username,display_name,password_hash,status,created_at,updated_at) VALUES('u','alice','Alice','x','active','2026-01-01','2026-01-01')");
+    audit.runAs("u", () => {
+      audit.record("management.create", "table", "1", "success");
+      audit.record("management.update", "table", "1", "success");
+      audit.record("management.delete", "table", "1", "failure");
+    });
+    expect(audit.statistics({ groupBy: "object" })).toEqual([
+      { group: "table", created: 1, viewed: 0, updated: 1, deleted: 0, other: 0, total: 2 },
+    ]);
+    expect(audit.statistics({ groupBy: "user" })[0]?.group).toBe("alice");
+    database.close();
+  });
   it("exports escaped Markdown and records audit context", () => {
     const database = new MetadataDatabase(":memory:");
     const now = new Date().toISOString();

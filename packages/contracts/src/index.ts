@@ -69,6 +69,8 @@ export type ManagementModule =
   | "dailyCounts"
   | "cubes"
   | "categories"
+  | "organizations"
+  | "systemTypes"
   | "dictionaryDefinitions"
   | "dictionaryValues";
 
@@ -91,6 +93,10 @@ export interface UserDto {
   roleIds: string[];
   failedLoginCount: number;
   lockedUntil: string | null;
+  gender: string;
+  contact: string;
+  email: string;
+  notes: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -101,6 +107,21 @@ export interface SaveUserInput {
   status: UserStatus;
   password?: string;
   roleIds: string[];
+  gender?: string;
+  contact?: string;
+  email?: string;
+  notes?: string;
+}
+export interface UpdateProfileInput {
+  displayName: string;
+  gender: string;
+  contact: string;
+  email: string;
+  notes: string;
+}
+export interface ChangePasswordInput {
+  currentPassword: string;
+  newPassword: string;
 }
 export interface RoleDto {
   id: string;
@@ -380,12 +401,28 @@ export interface AuditLogQuery {
   pageSize?: number;
   search?: string;
   result?: "success" | "failure";
+  from?: string;
+  to?: string;
 }
 export interface AuditLogPageDto {
   items: AuditLogDto[];
   total: number;
   page: number;
   pageSize: number;
+}
+export interface AuditStatisticsQuery {
+  from?: string;
+  to?: string;
+  groupBy: "object" | "user";
+}
+export interface AuditStatisticsRowDto {
+  group: string;
+  created: number;
+  viewed: number;
+  updated: number;
+  deleted: number;
+  other: number;
+  total: number;
 }
 export interface SavedQueryDto {
   id: string;
@@ -410,6 +447,8 @@ export interface DesktopApi {
     login(input: LoginInput): Promise<ApiResult<SessionDto>>;
     logout(): Promise<ApiResult<void>>;
     session(): Promise<ApiResult<SessionDto | null>>;
+    updateProfile(input: UpdateProfileInput): Promise<ApiResult<UserDto>>;
+    changePassword(input: ChangePasswordInput): Promise<ApiResult<void>>;
   };
   system: {
     info(): Promise<ApiResult<SystemInfoDto>>;
@@ -490,6 +529,9 @@ export interface DesktopApi {
   };
   audit: {
     list(query?: AuditLogQuery): Promise<ApiResult<AuditLogPageDto>>;
+    statistics(
+      query: AuditStatisticsQuery,
+    ): Promise<ApiResult<AuditStatisticsRowDto[]>>;
   };
   access: {
     listUsers(): Promise<ApiResult<UserDto[]>>;
@@ -511,6 +553,8 @@ export const IPC_CHANNELS = {
   authLogin: "auth:login",
   authLogout: "auth:logout",
   authSession: "auth:session",
+  authUpdateProfile: "auth:update-profile",
+  authChangePassword: "auth:change-password",
   systemInfo: "system:info",
   systemChooseImportFile: "system:choose-import-file",
   systemSaveTextFile: "system:save-text-file",
@@ -556,6 +600,7 @@ export const IPC_CHANNELS = {
   exportsTasks: "exports:tasks",
   exportsCancelTask: "exports:cancel-task",
   auditList: "audit:list",
+  auditStatistics: "audit:statistics",
   accessListUsers: "access:users:list",
   accessSaveUser: "access:users:save",
   accessRemoveUser: "access:users:remove",

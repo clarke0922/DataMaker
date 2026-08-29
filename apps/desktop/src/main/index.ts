@@ -217,6 +217,37 @@ async function bootstrap() {
         ? services.asActor(authorized.data.user.id, () => operation(...args))
         : authorized;
     };
+  const authenticated =
+    (operation: (userId: string, ...args: any[]) => unknown) =>
+    (_event: unknown, token: string | undefined, ...args: any[]) => {
+      const authorized = services.authorize(token);
+      return authorized.ok
+        ? services.asActor(authorized.data.user.id, () =>
+            operation(authorized.data.user.id, ...args),
+          )
+        : authorized;
+    };
+  const secureManagement =
+    (write: boolean, operation: (...args: any[]) => unknown) =>
+    (
+      _event: unknown,
+      token: string | undefined,
+      module: ManagementModule,
+      ...args: any[]
+    ) => {
+      const permission =
+        module === "organizations"
+          ? "system:user_manage"
+          : write
+            ? "metadata:manage"
+            : "metadata:read";
+      const authorized = services.authorize(token, permission);
+      return authorized.ok
+        ? services.asActor(authorized.data.user.id, () =>
+            operation(module, ...args),
+          )
+        : authorized;
+    };
   http = await startHttpServer(services);
   apiPort = http.port;
   integrationStatePath = path.join(app.getPath("userData"), "local-api.json");
@@ -249,6 +280,14 @@ async function bootstrap() {
   );
   ipcMain.handle(IPC_CHANNELS.authLogout, (_event, token: string | undefined) =>
     services.authLogout(token),
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.authUpdateProfile,
+    authenticated((userId, input) => services.updateProfile(userId, input)),
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.authChangePassword,
+    authenticated((userId, input) => services.changePassword(userId, input)),
   );
 
   ipcMain.handle(IPC_CHANNELS.systemInfo, () => services.systemInfo());
@@ -521,17 +560,17 @@ async function bootstrap() {
   );
   ipcMain.handle(
     IPC_CHANNELS.managementList,
-    secure("metadata:read", (module) => services.managementList(module)),
+    secureManagement(false, (module) => services.managementList(module)),
   );
   ipcMain.handle(
     IPC_CHANNELS.managementSave,
-    secure("metadata:manage", (module, input) =>
+    secureManagement(true, (module, input) =>
       services.managementSave(module, input),
     ),
   );
   ipcMain.handle(
     IPC_CHANNELS.managementRemove,
-    secure("metadata:manage", (module, id) =>
+    secureManagement(true, (module, id) =>
       services.managementRemove(module, id),
     ),
   );
@@ -630,6 +669,10 @@ async function bootstrap() {
   ipcMain.handle(
     IPC_CHANNELS.auditList,
     secure("system:user_manage", (query) => services.auditList(query)),
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.auditStatistics,
+    secure("system:user_manage", (query) => services.auditStatistics(query)),
   );
   ipcMain.handle(
     IPC_CHANNELS.accessListUsers,

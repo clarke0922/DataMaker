@@ -110,4 +110,69 @@ describe("AccessRepository", () => {
     );
     database.close();
   });
+
+  it("does not delete roles that are assigned to users", () => {
+    const database = new MetadataDatabase(":memory:");
+    const access = new AccessRepository(database.db);
+    const role = access.saveRole({
+      code: "reader",
+      name: "Reader",
+      permissionIds: [],
+    });
+    access.saveUser({
+      username: "admin",
+      displayName: "Administrator",
+      password: "Strong-password-123!",
+      status: "active",
+      roleIds: [],
+    });
+    access.saveUser({
+      username: "reader",
+      displayName: "Reader",
+      password: "Strong-password-456!",
+      status: "active",
+      roleIds: [role.id],
+    });
+    expect(() => access.removeRole(role.id)).toThrow("assigned to users");
+    database.close();
+  });
+
+  it("updates only self-service profile fields and verifies the current password", () => {
+    const database = new MetadataDatabase(":memory:");
+    const access = new AccessRepository(database.db);
+    const user = access.saveUser({
+      username: "admin",
+      displayName: "Administrator",
+      password: "Strong-password-123!",
+      status: "active",
+      roleIds: [],
+    });
+    expect(
+      access.updateProfile(user.id, {
+        displayName: "Local Admin",
+        gender: "男",
+        contact: "13800000000",
+        email: "admin@example.com",
+        notes: "Local account",
+      }),
+    ).toMatchObject({
+      username: "admin",
+      displayName: "Local Admin",
+      email: "admin@example.com",
+    });
+    expect(() =>
+      access.changePassword(user.id, {
+        currentPassword: "wrong-password",
+        newPassword: "Another-password-456!",
+      }),
+    ).toThrow("Invalid username or password");
+    access.changePassword(user.id, {
+      currentPassword: "Strong-password-123!",
+      newPassword: "Another-password-456!",
+    });
+    expect(access.authenticate("admin", "Another-password-456!").user.id).toBe(
+      user.id,
+    );
+    database.close();
+  });
 });

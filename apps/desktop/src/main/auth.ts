@@ -44,6 +44,10 @@ export class AuthService {
     for (const [token, session] of this.sessions)
       if (session.user.id === userId) this.sessions.delete(token);
   }
+  refreshUser(user: SessionDto["user"]) {
+    for (const session of this.sessions.values())
+      if (session.user.id === user.id) session.user = user;
+  }
   revokeAll() {
     this.sessions.clear();
   }

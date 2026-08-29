@@ -27,9 +27,34 @@ describe("MetadataManagementRepository", () => {
       "dailyCounts",
       "cubes",
       "categories",
+      "organizations",
     ] as const) {
       expect(repository.list(module)).toEqual([]);
     }
+    database.close();
+  });
+
+  it("maintains organization hierarchy, names, cycles, and delete protection", () => {
+    const database = new MetadataDatabase(":memory:");
+    const repository = new MetadataManagementRepository(database.db);
+    const root = repository.save("organizations", {
+      values: { code: "HQ", name: "Headquarters", display_order: 1 },
+    });
+    const child = repository.save("organizations", {
+      values: { code: "DAT", name: "Data Department", parent_id: root.id, display_order: 1 },
+    });
+    expect(repository.list("organizations").find((item) => item.id === child.id)?.full_name)
+      .toBe("Headquarters / Data Department");
+    expect(() => repository.save("organizations", {
+      id: root.id,
+      values: { parent_id: child.id },
+    })).toThrow("descendant");
+    expect(() => repository.remove("organizations", root.id)).toThrow("child organizations");
+    repository.save("organizations", { id: root.id, values: { name: "Main Office" } });
+    expect(repository.list("organizations").find((item) => item.id === child.id)?.full_name)
+      .toBe("Main Office / Data Department");
+    repository.remove("organizations", child.id);
+    repository.remove("organizations", root.id);
     database.close();
   });
 
@@ -110,6 +135,105 @@ describe("MetadataManagementRepository", () => {
     expect(repository.list("privateTables").map((item) => item.name)).toEqual([
       "PRIVATE_DATA",
     ]);
+    database.close();
+  });
+
+  it("persists table fields, hierarchy, display settings, and private promotion", () => {
+    const database = new MetadataDatabase(":memory:");
+    const repository = new MetadataManagementRepository(database.db);
+    const parent = repository.save("tables", {
+      values: {
+        name: "CUSTOMERS",
+        display_name: "Customers",
+        display_order: 1,
+        columns_json: JSON.stringify([
+          {
+            name: "ID",
+            display_name: "Identifier",
+            data_type: "number",
+            is_primary_key: 1,
+            nullable: 0,
+            searchable: 1,
+            title_column: 1,
+          },
+        ]),
+      },
+    });
+    const child = repository.save("privateTables", {
+      values: {
+        name: "CUSTOMER_NOTES",
+        display_name: "Customer Notes",
+        parent_id: parent.id,
+        table_type: "subtable",
+        columns_json: JSON.stringify([
+          { name: "NOTE", display_name: "Note", data_type: "clob" },
+        ]),
+      },
+    });
+    expect(repository.list("tables")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: child.id,
+          parent_name: "CUSTOMERS",
+          is_public: 0,
+        }),
+      ]),
+    );
+    expect(JSON.parse(String(parent.columns_json))[0]).toMatchObject({
+      name: "ID",
+      is_primary_key: 1,
+      searchable: 1,
+      title_column: 1,
+    });
+    repository.save("tables", {
+      id: child.id,
+      values: { is_public: 1 },
+    });
+    expect(repository.list("privateTables")).toEqual([]);
+    expect(() =>
+      repository.save("tables", {
+        values: {
+          name: "bad name",
+          display_name: "Bad",
+          columns_json: "[]",
+        },
+      }),
+    ).toThrow("Physical table name is invalid");
+    database.close();
+  });
+
+  it("validates daily increments and links them to managed tables", () => {
+    const database = new MetadataDatabase(":memory:");
+    const repository = new MetadataManagementRepository(database.db);
+    const table = repository.save("tables", {
+      values: { name: "ORDERS", display_name: "Orders" },
+    });
+    const count = repository.save("dailyCounts", {
+      values: {
+        table_id: table.id,
+        table_name: "IGNORED",
+        daily_increase: -3,
+        total_count: 97,
+        stat_date: "2026-08-28",
+      },
+    });
+    expect(count).toMatchObject({
+      table_id: table.id,
+      table_name: "ORDERS",
+      daily_increase: -3,
+      total_count: 97,
+      stat_date: "2026-08-28",
+    });
+    expect(() =>
+      repository.save("dailyCounts", {
+        values: {
+          table_name: "ORDERS",
+          daily_increase: 1,
+          total_count: -1,
+          stat_date: "2026-08-29",
+        },
+      }),
+    ).toThrow("Count values are invalid");
     database.close();
   });
 
@@ -237,6 +361,66 @@ describe("MetadataManagementRepository", () => {
       ]),
     );
     fs.unlinkSync(file);
+    database.close();
+  });
+
+  it("keeps category hierarchy stable and protects categories in use", () => {
+    const database = new MetadataDatabase(":memory:");
+    const repository = new MetadataManagementRepository(database.db);
+    const root = repository.save("categories", {
+      values: { name: "Business", display_order: 1 },
+    });
+    const child = repository.save("categories", {
+      values: { name: "Orders", parent_id: root.id, display_order: 1 },
+    });
+    expect(child).toMatchObject({
+      parent_id: root.id,
+      level_path: `/${root.id}/`,
+    });
+    repository.save("categories", {
+      id: child.id,
+      values: { name: "Sales Orders", parent_id: null, display_order: 2 },
+    });
+    expect(
+      repository.list("categories").find((item) => item.id === child.id),
+    ).toMatchObject({
+      name: "Sales Orders",
+      parent_id: root.id,
+      display_order: 2,
+    });
+    expect(() => repository.remove("categories", root.id)).toThrow(
+      "Categories with child categories cannot be deleted",
+    );
+    repository.save("tables", {
+      values: { name: "ORDERS", display_name: "Orders", category_id: child.id },
+    });
+    expect(() => repository.remove("categories", child.id)).toThrow(
+      "Categories containing data tables cannot be deleted",
+    );
+    database.close();
+  });
+
+  it("manages normalized system category codes", () => {
+    const database = new MetadataDatabase(":memory:");
+    const repository = new MetadataManagementRepository(database.db);
+    const type = repository.save("systemTypes", {
+      values: { code: "  report ", name: "Report Type", type_group: "Output" },
+    });
+    expect(type).toMatchObject({
+      code: "REPORT",
+      name: "Report Type",
+      type_group: "Output",
+    });
+    expect(() =>
+      repository.save("systemTypes", {
+        values: { code: "REPORT", name: "Duplicate" },
+      }),
+    ).toThrow();
+    expect(() =>
+      repository.save("systemTypes", {
+        values: { code: "X".repeat(21), name: "Long" },
+      }),
+    ).toThrow("length");
     database.close();
   });
 });

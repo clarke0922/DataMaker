@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   Button,
   Card,
+  Descriptions,
   Form,
   Input,
   message,
@@ -11,12 +12,16 @@ import {
   Space,
   Table,
   Tag,
+  Typography,
 } from "antd";
 import {
   DeleteOutlined,
   EditOutlined,
+  EyeOutlined,
+  KeyOutlined,
   PlusOutlined,
   ReloadOutlined,
+  UnlockOutlined,
 } from "@ant-design/icons";
 import type {
   PermissionDto,
@@ -31,15 +36,28 @@ import { useI18n } from "./i18n";
 
 type Section = "users" | "roles" | "permissions";
 
-export function AccessManagementPage({ section }: { section: Section }) {
+export function AccessManagementPage({
+  section,
+  currentUserId,
+  onSessionInvalidated,
+}: {
+  section: Section;
+  currentUserId: string;
+  onSessionInvalidated: () => void | Promise<void>;
+}) {
   const { t } = useI18n();
   const [users, setUsers] = useState<UserDto[]>([]);
   const [roles, setRoles] = useState<RoleDto[]>([]);
   const [permissions, setPermissions] = useState<PermissionDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<UserDto | RoleDto | PermissionDto>();
+  const [viewing, setViewing] = useState<UserDto>();
+  const [viewingRole, setViewingRole] = useState<RoleDto>();
+  const [passwordUser, setPasswordUser] = useState<UserDto>();
+  const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
+  const [passwordForm] = Form.useForm();
 
   async function load() {
     setLoading(true);
@@ -107,9 +125,14 @@ export function AccessManagementPage({ section }: { section: Section }) {
               id: editing?.id,
             } as SavePermissionInput);
     if (!result.ok) return message.error(result.error.message);
-    message.success(t(editing ? "Saved" : "Created"));
     setOpen(false);
     form.resetFields();
+    if (section === "users" && editing?.id === currentUserId) {
+      message.success(t("Account updated. Please sign in again."));
+      await onSessionInvalidated();
+      return;
+    }
+    message.success(t(editing ? "Saved" : "Created"));
     await load();
   }
 
@@ -122,6 +145,32 @@ export function AccessManagementPage({ section }: { section: Section }) {
           : await window.datamaker.access.removePermission(id);
     if (!result.ok) return message.error(result.error.message);
     message.success(t("Deleted"));
+    await load();
+  }
+
+  async function unlock(user: UserDto) {
+    const result = await window.datamaker.access.saveUser({
+      ...user,
+      status: "active",
+    });
+    if (!result.ok) return message.error(result.error.message);
+    message.success(t("User unlocked"));
+    if (user.id === currentUserId) return onSessionInvalidated();
+    await load();
+  }
+
+  async function resetPassword() {
+    const values = await passwordForm.validateFields();
+    if (!passwordUser) return;
+    const result = await window.datamaker.access.saveUser({
+      ...passwordUser,
+      password: values.password,
+    });
+    if (!result.ok) return message.error(result.error.message);
+    setPasswordUser(undefined);
+    passwordForm.resetFields();
+    message.success(t("Password reset successfully"));
+    if (passwordUser.id === currentUserId) return onSessionInvalidated();
     await load();
   }
 
@@ -153,8 +202,31 @@ export function AccessManagementPage({ section }: { section: Section }) {
   const permissionCodes = new Map(
     permissions.map((permission) => [permission.id, permission.code]),
   );
+  const permissionsByDomain = permissions.reduce<
+    Record<string, PermissionDto[]>
+  >((groups, permission) => {
+    (groups[permission.domain] ??= []).push(permission);
+    return groups;
+  }, {});
+  const permissionOptions = Object.entries(permissionsByDomain).map(
+    ([domain, items]) => ({
+      label: domain,
+      options: items.map((permission) => ({
+        value: permission.id,
+        label: `${permission.action} · ${permission.description}`,
+      })),
+    }),
+  );
   const dataSource =
-    section === "users" ? users : section === "roles" ? roles : permissions;
+    section === "users"
+      ? users.filter((user) =>
+          `${user.username} ${user.displayName}`
+            .toLowerCase()
+            .includes(search.trim().toLowerCase()),
+        )
+      : section === "roles"
+        ? roles
+        : permissions;
   const columns =
     section === "users"
       ? [
@@ -204,14 +276,69 @@ export function AccessManagementPage({ section }: { section: Section }) {
           {
             title: t("Actions"),
             key: "actions",
-            render: (_: unknown, record: UserDto) =>
-              actions(record, users.length <= 1),
+            width: 220,
+            render: (_: unknown, record: UserDto) => (
+              <Space>
+                <Button
+                  type="text"
+                  icon={<EyeOutlined />}
+                  title={t("View")}
+                  onClick={() => setViewing(record)}
+                />
+                <Button
+                  type="text"
+                  icon={<EditOutlined />}
+                  title={t("Edit")}
+                  onClick={() => edit(record)}
+                />
+                <Button
+                  type="text"
+                  icon={<KeyOutlined />}
+                  title={t("Reset Password")}
+                  onClick={() => {
+                    setPasswordUser(record);
+                    passwordForm.resetFields();
+                  }}
+                />
+                <Button
+                  type="text"
+                  icon={<UnlockOutlined />}
+                  title={t("Unlock")}
+                  disabled={
+                    !record.lockedUntil &&
+                    !record.failedLoginCount &&
+                    record.status !== "locked"
+                  }
+                  onClick={() => void unlock(record)}
+                />
+                <Popconfirm
+                  title={t("Delete this record?")}
+                  disabled={users.length <= 1}
+                  onConfirm={() => remove(record.id)}
+                >
+                  <Button
+                    type="text"
+                    danger
+                    disabled={users.length <= 1}
+                    icon={<DeleteOutlined />}
+                  />
+                </Popconfirm>
+              </Space>
+            ),
           },
         ]
       : section === "roles"
         ? [
             { title: t("Role Code"), dataIndex: "code" },
-            { title: t("Role Name"), dataIndex: "name" },
+            {
+              title: t("Role Name"),
+              dataIndex: "name",
+              render: (value: string, record: RoleDto) => (
+                <Button type="link" onClick={() => setViewingRole(record)}>
+                  {value}
+                </Button>
+              ),
+            },
             {
               title: t("Built-in"),
               dataIndex: "builtIn",
@@ -224,6 +351,12 @@ export function AccessManagementPage({ section }: { section: Section }) {
                 ids.map((id) => (
                   <Tag key={id}>{permissionCodes.get(id) ?? id}</Tag>
                 )),
+            },
+            {
+              title: t("Associated Users"),
+              key: "userCount",
+              render: (_: unknown, record: RoleDto) =>
+                users.filter((user) => user.roleIds.includes(record.id)).length,
             },
             {
               title: t("Actions"),
@@ -266,6 +399,15 @@ export function AccessManagementPage({ section }: { section: Section }) {
       )}
       extra={
         <Space>
+          {section === "users" && (
+            <Input.Search
+              allowClear
+              placeholder={t("Search users")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              style={{ width: 220 }}
+            />
+          )}
           <Button icon={<ReloadOutlined />} onClick={load}>
             {t("Refresh")}
           </Button>
@@ -317,32 +459,35 @@ export function AccessManagementPage({ section }: { section: Section }) {
               >
                 <Input />
               </Form.Item>
-              <Form.Item
-                name="password"
-                label={editing ? t("New Password (optional)") : t("Password")}
-                extra={t(
-                  "At least 12 characters with uppercase, lowercase, number, and symbol.",
-                )}
-                rules={[
-                  ...(editing ? [] : [{ required: true }]),
-                  {
-                    validator: async (_, value?: string) => {
-                      if (!value && editing) return;
-                      if (
-                        !value ||
-                        value.length < 12 ||
-                        !/[a-z]/.test(value) ||
-                        !/[A-Z]/.test(value) ||
-                        !/\d/.test(value) ||
-                        !/[^A-Za-z0-9]/.test(value)
-                      )
-                        throw new Error(t("Password does not meet the policy"));
+              {!editing && (
+                <Form.Item
+                  name="password"
+                  label={t("Password")}
+                  extra={t(
+                    "At least 12 characters with uppercase, lowercase, number, and symbol.",
+                  )}
+                  rules={[
+                    { required: true },
+                    {
+                      validator: async (_, value?: string) => {
+                        if (
+                          !value ||
+                          value.length < 12 ||
+                          !/[a-z]/.test(value) ||
+                          !/[A-Z]/.test(value) ||
+                          !/\d/.test(value) ||
+                          !/[^A-Za-z0-9]/.test(value)
+                        )
+                          throw new Error(
+                            t("Password does not meet the policy"),
+                          );
+                      },
                     },
-                  },
-                ]}
-              >
-                <Input.Password />
-              </Form.Item>
+                  ]}
+                >
+                  <Input.Password />
+                </Form.Item>
+              )}
               <Form.Item
                 name="status"
                 label={t("Status")}
@@ -385,10 +530,8 @@ export function AccessManagementPage({ section }: { section: Section }) {
               <Form.Item name="permissionIds" label={t("Permissions")}>
                 <Select
                   mode="multiple"
-                  options={permissions.map((permission) => ({
-                    value: permission.id,
-                    label: permission.code,
-                  }))}
+                  optionFilterProp="label"
+                  options={permissionOptions}
                 />
               </Form.Item>
             </>
@@ -422,6 +565,156 @@ export function AccessManagementPage({ section }: { section: Section }) {
             </>
           )}
         </Form>
+      </Modal>
+      <Modal
+        title={t("User Details")}
+        open={Boolean(viewing)}
+        footer={null}
+        onCancel={() => setViewing(undefined)}
+      >
+        {viewing && (
+          <Descriptions bordered column={2}>
+            <Descriptions.Item label={t("Username")}>
+              {viewing.username}
+            </Descriptions.Item>
+            <Descriptions.Item label={t("Display Name")}>
+              {viewing.displayName}
+            </Descriptions.Item>
+            <Descriptions.Item label={t("Status")}>
+              {t(viewing.status[0]!.toUpperCase() + viewing.status.slice(1))}
+            </Descriptions.Item>
+            <Descriptions.Item label={t("Roles")}>
+              {viewing.roleIds
+                .map((id) => roleNames.get(id) ?? id)
+                .join(", ") || "-"}
+            </Descriptions.Item>
+            <Descriptions.Item label={t("Created At")}>
+              {viewing.createdAt}
+            </Descriptions.Item>
+            <Descriptions.Item label={t("Updated At")}>
+              {viewing.updatedAt}
+            </Descriptions.Item>
+            <Descriptions.Item label={t("Failed Login Count")}>
+              {viewing.failedLoginCount}
+            </Descriptions.Item>
+            <Descriptions.Item label={t("Locked Until")}>
+              {viewing.lockedUntil ?? "-"}
+            </Descriptions.Item>
+          </Descriptions>
+        )}
+      </Modal>
+      <Modal
+        title={t("Reset Password")}
+        open={Boolean(passwordUser)}
+        onOk={() => void resetPassword()}
+        onCancel={() => {
+          setPasswordUser(undefined);
+          passwordForm.resetFields();
+        }}
+        destroyOnHidden
+      >
+        <Form form={passwordForm} layout="vertical" preserve={false}>
+          <Form.Item label={t("Username")}>
+            <Input disabled value={passwordUser?.username} />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label={t("New Password")}
+            extra={t(
+              "At least 12 characters with uppercase, lowercase, number, and symbol.",
+            )}
+            rules={[
+              { required: true },
+              {
+                validator: async (_, value?: string) => {
+                  if (
+                    !value ||
+                    value.length < 12 ||
+                    !/[a-z]/.test(value) ||
+                    !/[A-Z]/.test(value) ||
+                    !/\d/.test(value) ||
+                    !/[^A-Za-z0-9]/.test(value)
+                  )
+                    throw new Error(t("Password does not meet the policy"));
+                },
+              },
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
+          <Form.Item
+            name="confirmPassword"
+            label={t("Confirm Password")}
+            dependencies={["password"]}
+            rules={[
+              { required: true },
+              {
+                validator: async (_, value) => {
+                  if (value !== passwordForm.getFieldValue("password"))
+                    throw new Error(t("Passwords do not match"));
+                },
+              },
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        title={t("Role Details")}
+        open={Boolean(viewingRole)}
+        footer={null}
+        width={760}
+        onCancel={() => setViewingRole(undefined)}
+      >
+        {viewingRole && (
+          <>
+            <Descriptions bordered column={2} style={{ marginBottom: 16 }}>
+              <Descriptions.Item label={t("Role Code")}>
+                {viewingRole.code}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("Role Name")}>
+                {viewingRole.name}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("Built-in")}>
+                {t(viewingRole.builtIn ? "Yes" : "No")}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("Permissions")}>
+                {viewingRole.permissionIds.length}
+              </Descriptions.Item>
+            </Descriptions>
+            <Typography.Title level={5}>
+              {t("Permission Assignment")}
+            </Typography.Title>
+            <Space wrap style={{ marginBottom: 16 }}>
+              {viewingRole.permissionIds.map((id) => (
+                <Tag key={id}>{permissionCodes.get(id) ?? id}</Tag>
+              ))}
+            </Space>
+            <Typography.Title level={5}>
+              {t("Associated Users")}
+            </Typography.Title>
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={users.filter((user) =>
+                user.roleIds.includes(viewingRole.id),
+              )}
+              locale={{ emptyText: t("No associated users") }}
+              columns={[
+                { title: t("Username"), dataIndex: "username" },
+                { title: t("Display Name"), dataIndex: "displayName" },
+                {
+                  title: t("Status"),
+                  dataIndex: "status",
+                  render: (value: UserStatus) =>
+                    t(value[0]!.toUpperCase() + value.slice(1)),
+                },
+              ]}
+            />
+          </>
+        )}
       </Modal>
     </Card>
   );

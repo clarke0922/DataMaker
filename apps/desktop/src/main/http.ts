@@ -4,6 +4,7 @@ import type { ApplicationServices } from "./services.js";
 import type {
   ExportDictionaryInput,
   AuditLogQuery,
+  AuditStatisticsQuery,
   LoginInput,
   ManagementModule,
   MetadataTableQuery,
@@ -64,7 +65,9 @@ export async function startHttpServer(services: ApplicationServices) {
       timingSafeEqual(Buffer.from(supplied), Buffer.from(token));
     if (integration) return;
     const permission =
+      request.url.includes("/management/organizations") ||
       request.url.includes("/access/users") ||
+      request.url.includes("/audit-statistics") ||
       request.url.includes("/audit-logs")
         ? "system:user_manage"
         : request.url.includes("/access/roles")
@@ -225,14 +228,21 @@ export async function startHttpServer(services: ApplicationServices) {
       pageSize?: string;
       search?: string;
       result?: "success" | "failure";
+      from?: string;
+      to?: string;
     };
     return services.auditList({
       page: Number(query.page) || 1,
       pageSize: Number(query.pageSize) || 20,
       search: query.search,
       result: query.result,
+      from: query.from,
+      to: query.to,
     } satisfies AuditLogQuery);
   });
+  server.get("/api/v1/audit-statistics", async (request) =>
+    services.auditStatistics(request.query as AuditStatisticsQuery),
+  );
   server.get("/api/v1/access/users", async () => services.listUsers());
   server.post("/api/v1/access/users", async (request) =>
     services.saveUser(request.body as SaveUserInput),

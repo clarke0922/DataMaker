@@ -154,6 +154,20 @@ export function getManagementSpecs(
         { key: "display_order", label: t("Order"), type: "number" },
       ],
     },
+    organizations: {
+      title: t("Organization Management"),
+      description: t("Maintain the organization hierarchy and sibling order."),
+      fields: [],
+    },
+    systemTypes: {
+      title: t("System Type Management"),
+      description: t("Maintain reusable system category codes and groups."),
+      fields: [
+        { key: "code", label: t("Type Code"), required: true },
+        { key: "name", label: t("Type Name"), required: true },
+        { key: "type_group", label: t("Type Group") },
+      ],
+    },
     dictionaryDefinitions: {
       title: t("Dictionary Management"),
       description: t(
